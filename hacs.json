@@ -1,0 +1,8 @@
+{
+  "name": "Time Spent Pie Card",
+  "description": "Lovelace custom card that shows a pie/doughnut chart of time spent at different locations or driving, per person entity.",
+  "render_readme": true,
+  "filename": "time-spent-pie-card.js",
+  "homeassistant": "2023.0.0",
+  "content_in_root": false
+}
