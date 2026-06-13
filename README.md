@@ -2,29 +2,31 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
-Tarjeta Lovelace personalizada para Home Assistant que muestra una **gráfica de pastel (doughnut)** con el tiempo acumulado —en horas— que una persona pasa en cada ubicación o manejando, basándose en el historial de la entidad `person.*`.
+A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** with accumulated time in hours for each location and the `In transit` state, based on `person.*` entity history.
 
 ---
 
-## Características
+## Features
 
-- Consulta la API de historial de HA para el rango **diario** (hoy, 00:00 → ahora) o **semanal** (lunes 00:00 → ahora).
-- **Filtro de velocidad**: si `attributes.speed ≥ speed_threshold`, el intervalo se acumula en "Manejando" sin importar la zona geográfica.
-- Clasifica automáticamente: `En casa`, `Manejando`, `Desconocido` y cualquier **zona personalizada** de HA.
-- Se adapta al tema oscuro/claro usando variables CSS nativas de HA.
-- Diseño responsivo: úsalo en grids o columnas para mostrar un miembro de la familia por tarjeta.
+- Queries the Home Assistant history API for a **daily** range (today, 00:00 -> now) or **weekly** range (Monday 00:00 -> now).
+- **Speed hysteresis filter**: use `speed_set_threshold` to enter In transit and `speed_reset_threshold` to leave In transit.
+- Automatically classifies `Home`, `In transit`, `Unknown`, and any custom HA zones.
+- Shows live header pills for the person's **current state** and **current speed**.
+- Supports both **doughnut** and **pie** chart styles via configuration.
+- Adapts to light/dark themes using native HA CSS variables.
+- Responsive layout: use it in grids or columns to show one family member per card.
 
 ---
 
-## Instalación con HACS
+## Installation With HACS
 
-1. Ve a **HACS → Frontend → ⋮ → Repositorios personalizados**.
-2. Agrega la URL de este repositorio y selecciona categoría **Lovelace**.
-3. Instala la tarjeta y recarga la interfaz.
+1. Go to **HACS -> Frontend -> ... -> Custom repositories**.
+2. Add this repository URL and select the **Lovelace** category.
+3. Install the card and reload the UI.
 
-### Instalación manual
+### Manual Installation
 
-Copia `time-spent-pie-card.js` en `<config>/www/` y agrega el recurso en **Ajustes → Panel de control → Recursos**:
+Copy `time-spent-pie-card.js` to `<config>/www/` and add the resource in **Settings -> Dashboards -> Resources**:
 
 ```yaml
 url: /local/time-spent-pie-card.js
@@ -33,28 +35,58 @@ type: module
 
 ---
 
-## Configuración YAML
+## YAML Configuration
 
 ```yaml
 type: custom:time-spent-pie-card
-entity: person.miguel           # Obligatorio — entidad person.*
-name: Miguel                    # Opcional — título personalizado
-time_range: daily               # Obligatorio — "daily" o "weekly"
-speed_threshold: 15             # Opcional — km/h para detectar "Manejando" (default: 15)
+entity: person.person1          # Required - person.* entity
+name: Person 1                  # Optional - custom title
+time_range: daily               # Required - "daily" or "weekly"
+chart_type: doughnut            # Optional - "doughnut" or "pie" (default: doughnut)
+speed_set_threshold: 15         # Optional - km/h to enter "In transit" (default: 15)
+speed_reset_threshold: 10       # Optional - km/h to exit "In transit" (default: speed_set_threshold)
+debug: false                    # Optional - show debug details on the card
 ```
 
-### Parámetros
+### Parameters
 
-| Campo             | Tipo    | Obligatorio | Default | Descripción |
-|-------------------|---------|-------------|---------|-------------|
-| `entity`          | string  | ✅          | —       | Entidad `person.*` a monitorear |
-| `name`            | string  | ❌          | `friendly_name` de la entidad | Título de la tarjeta |
-| `time_range`      | string  | ✅          | —       | `daily` (hoy 00:00→ahora) o `weekly` (lunes 00:00→ahora) |
-| `speed_threshold` | number  | ❌          | `15`    | Velocidad (km/h) a partir de la cual se contabiliza como "Manejando" |
+| Field                   | Type    | Required | Default                  | Description |
+|-------------------------|---------|----------|--------------------------|-------------|
+| `entity`                | string  | Yes      | -                        | `person.*` entity to monitor |
+| `name`                  | string  | No       | Entity `friendly_name`   | Card title |
+| `time_range`            | string  | Yes      | -                        | `daily` (today 00:00->now) or `weekly` (Monday 00:00->now) |
+| `chart_type`            | string  | No       | `doughnut`               | Chart style: `doughnut` or `pie` |
+| `speed_set_threshold`   | number  | No       | `15`                     | Speed (km/h) at or above which In transit starts |
+| `speed_reset_threshold` | number  | No       | `speed_set_threshold`    | Speed (km/h) at or below which In transit ends |
+| `debug`                 | boolean | No       | `false`                  | Shows debug details (source, tracker counts, sample points) |
+| `speed_threshold`       | number  | No       | Legacy fallback          | Backward-compatible fallback used when `speed_set_threshold` is not provided |
+
+### Parameter Details
+
+- `entity`:
+  Selects the Home Assistant `person.*` entity used to query history and classify time by location/state.
+- `name`:
+  Optional title shown at the top of the card. If omitted, the entity `friendly_name` is used.
+- `time_range`:
+  Defines the aggregation window.
+  - `daily`: from today at 00:00 to now.
+  - `weekly`: from Monday at 00:00 to now.
+- `chart_type`:
+  Visual style of the chart.
+  - `doughnut`: ring chart.
+  - `pie`: full pie chart.
+- `speed_set_threshold`:
+  Speed in km/h that turns the state to `In transit`.
+- `speed_reset_threshold`:
+  Speed in km/h that exits `In transit`. Must be less than or equal to `speed_set_threshold`.
+- `debug`:
+  Shows an additional debug box with source tracker id, tracker counts, and sample tracker points.
+- `speed_threshold` (legacy):
+  Backward-compatible fallback only. When `speed_set_threshold` is not set, this value is used as the set threshold.
 
 ---
 
-## Ejemplo — múltiples personas en grid
+## Example - Multiple People In A Grid
 
 ```yaml
 type: grid
@@ -62,40 +94,118 @@ columns: 3
 square: false
 cards:
   - type: custom:time-spent-pie-card
-    entity: person.miguel
+    entity: person.person1
+    name: Person 1
     time_range: weekly
+    chart_type: doughnut
+    speed_set_threshold: 18
+    speed_reset_threshold: 10
 
   - type: custom:time-spent-pie-card
-    entity: person.laura
+    entity: person.person2
+    name: Person 2
     time_range: weekly
+    chart_type: pie
+    speed_set_threshold: 20
+    speed_reset_threshold: 12
+```
+
+## More Configuration Examples
+
+### Minimal Daily Card
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person1
+time_range: daily
+```
+
+### Weekly Pie Style With Custom Thresholds
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person1
+name: Person 1 Weekly
+time_range: weekly
+chart_type: pie
+speed_set_threshold: 22
+speed_reset_threshold: 14
+```
+
+### Two-Column Dashboard For Two People
+
+```yaml
+type: grid
+columns: 2
+square: false
+cards:
+  - type: custom:time-spent-pie-card
+    entity: person.person1
+    name: Person 1
+    time_range: daily
+    chart_type: doughnut
 
   - type: custom:time-spent-pie-card
-    entity: person.sofia
-    time_range: weekly
+    entity: person.person2
+    name: Person 2
+    time_range: daily
+    chart_type: doughnut
+```
+
+### Debug Example (Troubleshooting)
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person2
+name: Person 2 Debug
+time_range: daily
+chart_type: doughnut
+speed_set_threshold: 15
+speed_reset_threshold: 10
+debug: true
+```
+
+### Legacy Compatibility Example
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person1
+time_range: daily
+speed_threshold: 15
 ```
 
 ---
 
-## Estructura del repositorio
+## Repository Structure
 
 ```
 .
-├── time-spent-pie-card.js   # Código principal de la tarjeta
-├── hacs.json                # Manifiesto HACS
-└── README.md
+|-- time-spent-pie-card.js   # Main card code
+|-- hacs.json                # HACS manifest
+`-- README.md
 ```
 
 ---
 
-## Notas técnicas
+## Technical Notes
 
-- La tarjeta **no requiere** sensores ni ayudantes (`helpers`) adicionales en HA; construye los acumuladores en tiempo real a partir del historial.
-- Internamente usa **Chart.js 4** cargado dinámicamente desde CDN si no está disponible en la página.
-- El historial se refresca **como máximo una vez por minuto** para no saturar la API.
-- Los estados con `0 h` acumuladas se omiten de la gráfica y del grid de indicadores.
+- The card **does not require** additional sensors or helpers; it builds accumulators in real time directly from history.
+- Internally it uses **Chart.js 4**, loaded dynamically from CDN if it is not available on the page.
+- History refresh is limited to **once per minute** to avoid overloading the API.
+- States with accumulated `0 h` are omitted from both the chart and stats chips.
+- Total accumulated hours are displayed below the chart.
 
 ---
 
-## Licencia
+## Changelog
 
-MIT — © miplatas / FIME-UANL
+- `1.0.0`: Initial release.
+- `1.0.1`: Fixed speed error bug.
+- `1.0.2`: Fixed speed error bug.
+- `1.0.3`: Current release.
+
+---
+
+## License
+
+MIT - Copyright (c) miplatas / FIME-UANL
