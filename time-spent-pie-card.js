@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.3
+ * time-spent-pie-card.js  — v1.0.4
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -7,9 +7,10 @@
  *  - v1.0.0: Initial release.
  *  - v1.0.1: Fixed speed error bug.
  *  - v1.0.2: Fixed speed error bug.
- *  - v1.0.3: Add Hysteresis thresholds (set/reset) for speed detection.
+ *  - v1.0.3: Add hysteresis thresholds (set/reset) for speed detection.
+ *  - v1.0.4: Improve speed derivation with anti-jitter GPS filters.
  *
- * CHANGES v1.0.3:
+ * CHANGES v1.0.4:
  *  - Speed is calculated with Haversine using source device_tracker history
  *    (native HA GPS), because that tracker does not store a "speed" attribute.
  *  - For each [cur → next] interval from person.*, tracker history is scanned
@@ -76,8 +77,13 @@ function haversineKm(lat1, lon1, lat2, lon2) {
  * Maximum speed (km/h) found in tracker history
  * within interval [startMs, endMs].
  * Calculates speed between consecutive position pairs.
+ * Applies basic anti-jitter filters so thresholds remain realistic.
  */
 function maxSpeedInInterval(trackerList, startMs, endMs) {
+  const MIN_DT_SECONDS = 15;      // ignore very short intervals (GPS jitter)
+  const MIN_DIST_METERS = 15;     // ignore tiny jumps (position noise)
+  const MAX_PLAUSIBLE_KMH = 220;  // filter out unrealistic spikes
+
   // Filter states inside the interval + the state right before start
   // (to get the interval starting position)
   const relevant = [];
@@ -96,15 +102,20 @@ function maxSpeedInInterval(trackerList, startMs, endMs) {
     const b   = relevant[i + 1];
     const aAt = a.attributes || a.a || {};
     const bAt = b.attributes || b.a || {};
-    const lat1 = aAt.latitude,  lon1 = aAt.longitude;
-    const lat2 = bAt.latitude,  lon2 = bAt.longitude;
-    if (!lat1 || !lat2) continue;
+    const lat1 = Number(aAt.latitude),  lon1 = Number(aAt.longitude);
+    const lat2 = Number(bAt.latitude),  lon2 = Number(bAt.longitude);
+    if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) continue;
 
     const distKm  = haversineKm(lat1, lon1, lat2, lon2);
-    const dtHours = msToHours(stateTs(b) - stateTs(a));
+    const dtSeconds = (stateTs(b) - stateTs(a)) / 1000;
+    if (dtSeconds < MIN_DT_SECONDS) continue;
+    if ((distKm * 1000) < MIN_DIST_METERS) continue;
+
+    const dtHours = dtSeconds / 3600;
     if (dtHours <= 0) continue;
 
     const speedKmh = distKm / dtHours;
+    if (speedKmh > MAX_PLAUSIBLE_KMH) continue;
     if (speedKmh > maxSpeed) maxSpeed = speedKmh;
   }
   return maxSpeed;

@@ -10,6 +10,7 @@ A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** wit
 
 - Queries the Home Assistant history API for a **daily** range (today, 00:00 -> now) or **weekly** range (Monday 00:00 -> now).
 - **Speed hysteresis filter**: use `speed_set_threshold` to enter In transit and `speed_reset_threshold` to leave In transit.
+- Speed estimation from GPS history includes anti-jitter filtering (minimum sample interval, minimum distance jump, and plausible speed cap).
 - Automatically classifies `Home`, `In transit`, `Unknown`, and any custom HA zones.
 - Shows live header pills for the person's **current state** and **current speed**.
 - Supports both **doughnut** and **pie** chart styles via configuration.
@@ -79,6 +80,7 @@ debug: false                    # Optional - show debug details on the card
   Speed in km/h that turns the state to `In transit`.
 - `speed_reset_threshold`:
   Speed in km/h that exits `In transit`. Must be less than or equal to `speed_set_threshold`.
+  Typical values: `15` set and `10` reset.
 - `debug`:
   Shows an additional debug box with source tracker id, tracker counts, and sample tracker points.
 - `speed_threshold` (legacy):
@@ -174,6 +176,16 @@ time_range: daily
 speed_threshold: 15
 ```
 
+### Recommended Hysteresis Values
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person1
+time_range: daily
+speed_set_threshold: 15
+speed_reset_threshold: 10
+```
+
 ---
 
 ## Repository Structure
@@ -202,7 +214,8 @@ speed_threshold: 15
 - `1.0.0`: Initial release.
 - `1.0.1`: Fixed speed error bug.
 - `1.0.2`: Fixed speed error bug.
-- `1.0.3`: Current release.
+- `1.0.3`: Added hysteresis thresholds (set/reset) for speed detection.
+- `1.0.4`: Improved speed derivation with anti-jitter GPS filters. Current release.
 
 ---
 
