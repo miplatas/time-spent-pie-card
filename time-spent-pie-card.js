@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.5
+ * time-spent-pie-card.js  — v1.0.6
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -10,16 +10,26 @@
  *  - v1.0.3: Add hysteresis thresholds (set/reset) for speed detection.
  *  - v1.0.4: Improve speed derivation with anti-jitter GPS filters.
  *  - v1.0.5: Add sustained-movement requirement to reduce false In transit detection.
+ *  - v1.0.6: Fix persistent false In transit positives; each interval now evaluated
+ *            independently using median speed + minimum distance requirement; remove
+ *            shared drivingActive state that caused sticky In transit across intervals;
+ *            enforce MAX_DT_SECONDS=300 per GPS pair to suppress stale-ping speed errors.
  *
- * CHANGES v1.0.5:
- *  - Speed is calculated with Haversine using source device_tracker history
- *    (native HA GPS), because that tracker does not store a "speed" attribute.
- *  - For each [cur → next] interval from person.*, tracker history is scanned
- *    for GPS positions inside that interval and motion metrics are computed.
- *    Hysteresis thresholds (set/reset) plus sustained movement checks define
- *    when state becomes In transit.
- *  - extractSpeed() is kept as a fallback for trackers exposing speed directly.
- *  - debug: true shows sourceId, counters, and sample positions on the card.
+ * CHANGES v1.0.6:
+ *  - ROOT CAUSE FIX: removed shared `drivingActive` hysteresis variable that persisted
+ *    across ALL person-state intervals — a single GPS spike early in the day caused the
+ *    entire rest of the day to be classified as In transit until a reset event appeared.
+ *  - Each person-state interval is now classified independently. An interval is In transit
+ *    only when BOTH conditions hold for tracker samples strictly inside that interval:
+ *      (a) median speed >= speed_set_threshold
+ *      (b) total moving distance >= 200 m
+ *  - analyzeIntervalMotion() now computes median speed (not max) — far more robust against
+ *    occasional GPS satellite jumps.
+ *  - Added MAX_DT_SECONDS=300 guard per GPS pair to exclude stale tracker pings that
+ *    produced an unrealistically high (or low) speed from a large position gap.
+ *  - Removed the `prev` context point that prepended a sample from before the interval
+ *    start, which caused the first Δt to span an arbitrary large gap.
+ *  - debug output now includes median speed and moving distance for the first interval.
  */
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
@@ -76,31 +86,33 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Motion metrics found in tracker history
- * within interval [startMs, endMs].
- * Calculates speed between consecutive position pairs.
- * Applies basic anti-jitter filters so thresholds remain realistic.
+ * Analyse GPS tracker samples that fall strictly within [startMs, endMs].
+ * Returns the median speed of qualifying pairs (km/h) and total distance moved
+ * above speedThreshold. Using median instead of max avoids GPS spikes.
+ *
+ * Filters applied per sample pair:
+ *  - dt must be between MIN_DT_SECONDS and MAX_DT_SECONDS (avoids stale pings)
+ *  - distance must exceed MIN_DIST_METERS        (avoids position noise)
+ *  - computed speed must be below MAX_PLAUSIBLE_KMH (avoids satellite jumps)
  */
 function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
-  const MIN_DT_SECONDS = 15;      // ignore very short intervals (GPS jitter)
-  const MIN_DIST_METERS = 15;     // ignore tiny jumps (position noise)
-  const MAX_PLAUSIBLE_KMH = 220;  // filter out unrealistic spikes
+  const MIN_DT_SECONDS     = 10;    // ignore sub-10s pairs (GPS burst noise)
+  const MAX_DT_SECONDS     = 300;   // ignore pairs > 5 min apart (stale pings cause huge Δd/Δt errors)
+  const MIN_DIST_METERS    = 20;    // ignore tiny position wobble
+  const MAX_PLAUSIBLE_KMH  = 180;   // hard cap — no road vehicle goes faster
 
-  // Filter states inside the interval + the state right before start
-  // (to get the interval starting position)
-  const relevant = [];
-  let prev = null;
-  for (const s of trackerList) {
+  // Collect only samples whose timestamp falls within the person-state interval
+  const relevant = trackerList.filter(s => {
     const t = stateTs(s);
-    if (t < startMs) { prev = s; continue; }
-    if (t > endMs)   break;
-    relevant.push(s);
-  }
-  if (prev) relevant.unshift(prev);   // add context position
+    return t >= startMs && t <= endMs;
+  });
 
-  let maxSpeed = 0;
-  let movingSeconds = 0;
+  // Need at least two points to form a pair
+  if (relevant.length < 2) return { medianSpeed: 0, movingDistanceKm: 0 };
+
+  const speeds = [];
   let movingDistanceKm = 0;
+
   for (let i = 0; i < relevant.length - 1; i++) {
     const a   = relevant[i];
     const b   = relevant[i + 1];
@@ -110,24 +122,29 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
     const lat2 = Number(bAt.latitude),  lon2 = Number(bAt.longitude);
     if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) continue;
 
-    const distKm  = haversineKm(lat1, lon1, lat2, lon2);
+    const distKm    = haversineKm(lat1, lon1, lat2, lon2);
     const dtSeconds = (stateTs(b) - stateTs(a)) / 1000;
-    if (dtSeconds < MIN_DT_SECONDS) continue;
+
+    if (dtSeconds < MIN_DT_SECONDS || dtSeconds > MAX_DT_SECONDS) continue;
     if ((distKm * 1000) < MIN_DIST_METERS) continue;
 
-    const dtHours = dtSeconds / 3600;
-    if (dtHours <= 0) continue;
-
-    const speedKmh = distKm / dtHours;
+    const speedKmh = distKm / (dtSeconds / 3600);
     if (speedKmh > MAX_PLAUSIBLE_KMH) continue;
-    if (speedKmh > maxSpeed) maxSpeed = speedKmh;
 
-    if (speedKmh >= speedThreshold) {
-      movingSeconds += dtSeconds;
-      movingDistanceKm += distKm;
-    }
+    speeds.push(speedKmh);
+    if (speedKmh >= speedThreshold) movingDistanceKm += distKm;
   }
-  return { maxSpeed, movingSeconds, movingDistanceKm };
+
+  if (speeds.length === 0) return { medianSpeed: 0, movingDistanceKm: 0 };
+
+  // Median is far more robust than max against occasional GPS jumps
+  speeds.sort((a, b) => a - b);
+  const mid = Math.floor(speeds.length / 2);
+  const medianSpeed = speeds.length % 2 === 0
+    ? (speeds[mid - 1] + speeds[mid]) / 2
+    : speeds[mid];
+
+  return { medianSpeed, movingDistanceKm };
 }
 
 /** Fallback: explicit speed attribute (for trackers that expose it) */
@@ -331,18 +348,29 @@ class TimeSpentPieCard extends HTMLElement {
       }
 
       if (debug) {
-        const sample = trackerList.slice(0, 2).map(s => ({
+        const sample = trackerList.slice(0, 3).map(s => ({
           ts:    new Date(stateTs(s)).toLocaleTimeString(),
           state: s.s ?? s.state,
           lat:   (s.attributes||s.a||{}).latitude,
           lon:   (s.attributes||s.a||{}).longitude,
           speed_attr: extractSpeed(s),
         }));
+        // Sample motion analysis on the first person interval for diagnostic
+        const firstInterval = personList[0];
+        const secondInterval = personList[1];
+        let motionSample = null;
+        if (firstInterval && secondInterval) {
+          const t0 = stateTs(firstInterval);
+          const t1 = stateTs(secondInterval);
+          motionSample = analyzeIntervalMotion(trackerList, t0, t1, speed_set_threshold);
+        }
         const dbBox = this.shadowRoot.getElementById("debugBox");
         dbBox.style.display = "";
         dbBox.textContent =
           `source: ${sourceId}\ntrackers tried: ${allTrackers.join(", ")}\n` +
           `person states: ${personList.length} | tracker states: ${trackerList.length}\n` +
+          `speed_set: ${speed_set_threshold} | speed_reset: ${speed_reset_threshold}\n` +
+          (motionSample ? `1st interval motion: medianSpd=${motionSample.medianSpeed.toFixed(1)} km/h movingDist=${(motionSample.movingDistanceKm*1000).toFixed(0)} m\n` : '') +
           `tracker sample:\n${JSON.stringify(sample, null, 2)}`;
       }
 
@@ -362,30 +390,32 @@ class TimeSpentPieCard extends HTMLElement {
   // ── Processing ───────────────────────────────────────────────────────────────
   _processHistory(personList, trackerList, hass, speedSetThreshold, speedResetThreshold) {
     const acc = {};
-    let drivingActive = false;
+
+    // Minimum GPS distance that must be covered above the threshold within the
+    // interval to count it as In transit (avoids classifying brief/noisy GPS
+    // pairs that accidentally exceed the speed threshold).
+    const MIN_TRANSIT_DISTANCE_KM = 0.2; // 200 m
 
     const classify = (stateObj, startMs, endMs) => {
       // Priority 1: explicit speed attribute on person.* state
       let speed = extractSpeed(stateObj);
 
-      // Priority 2: max Haversine speed from GPS tracker history
-      if (speed < speedSetThreshold && trackerList.length > 1) {
+      // Priority 2: derive speed from GPS tracker history scoped to this interval
+      if (speed < speedSetThreshold && trackerList.length >= 2) {
         const motion = analyzeIntervalMotion(trackerList, startMs, endMs, speedSetThreshold);
 
-        // Require sustained movement to avoid classifying long intervals from
-        // single GPS spikes. Either 60s above threshold or ~300m moving.
-        const sustainedMotion = motion.movingSeconds >= 60 || motion.movingDistanceKm >= 0.3;
-        if (sustainedMotion) {
-          speed = Math.max(speed, motion.maxSpeed);
+        // Only accept the motion result if:
+        //  a) median speed is above set threshold  (not just a stray fast pair)
+        //  b) meaningful distance was covered above threshold (avoids 1-pair spikes)
+        if (motion.medianSpeed >= speedSetThreshold &&
+            motion.movingDistanceKm >= MIN_TRANSIT_DISTANCE_KM) {
+          speed = motion.medianSpeed;
         }
       }
 
-      if (speed >= speedSetThreshold) {
-        drivingActive = true;
-      } else if (speed <= speedResetThreshold) {
-        drivingActive = false;
-      }
-      if (drivingActive) return { label: "In transit", color: DRIVING_COLOR };
+      // Each interval is evaluated independently — no sticky state carried over
+      const isInTransit = speed >= speedSetThreshold;
+      if (isInTransit) return { label: "In transit", color: DRIVING_COLOR };
 
       const s = stateObj.s ?? stateObj.state ?? "unknown";
       if (s === "home")                           return { label: "Home",      color: HOME_COLOR    };

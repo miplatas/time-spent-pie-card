@@ -223,7 +223,8 @@ speed_reset_threshold: 10
 - `1.0.2`: Fixed speed error bug.
 - `1.0.3`: Added hysteresis thresholds (set/reset) for speed detection.
 - `1.0.4`: Improved speed derivation with anti-jitter GPS filters.
-- `1.0.5`: Added sustained-movement requirement to reduce false In transit detection. Current release.
+- `1.0.5`: Added sustained-movement requirement to reduce false In transit detection.
+- `1.0.6`: Fixed persistent false In transit positives. Each interval is now evaluated independently using median speed + minimum distance (200 m) requirement. Removed shared hysteresis state that caused entire days to be classified as In transit after a single GPS spike. Added MAX_DT_SECONDS guard on GPS pairs to suppress stale-ping errors. **Current release.**
 
 ---
 
