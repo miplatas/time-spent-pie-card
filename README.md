@@ -11,6 +11,7 @@ A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** wit
 - Queries the Home Assistant history API for a **daily** range (today, 00:00 -> now) or **weekly** range (Monday 00:00 -> now).
 - **Speed hysteresis filter**: use `speed_set_threshold` to enter In transit and `speed_reset_threshold` to leave In transit.
 - Speed estimation from GPS history includes anti-jitter filtering (minimum sample interval, minimum distance jump, and plausible speed cap).
+- In transit classification also requires sustained movement above threshold (time or distance), not only a single speed spike.
 - Automatically classifies `Home`, `In transit`, `Unknown`, and any custom HA zones.
 - Shows live header pills for the person's **current state** and **current speed**.
 - Supports both **doughnut** and **pie** chart styles via configuration.
@@ -81,6 +82,12 @@ debug: false                    # Optional - show debug details on the card
 - `speed_reset_threshold`:
   Speed in km/h that exits `In transit`. Must be less than or equal to `speed_set_threshold`.
   Typical values: `15` set and `10` reset.
+
+Derived-motion safeguards used internally:
+- Minimum interval between GPS samples: `15 s`
+- Minimum movement between samples: `15 m`
+- Maximum plausible speed cap: `220 km/h`
+- Sustained movement requirement to classify `In transit`: at least `60 s` above set threshold or about `300 m` of above-threshold movement
 - `debug`:
   Shows an additional debug box with source tracker id, tracker counts, and sample tracker points.
 - `speed_threshold` (legacy):
@@ -215,7 +222,8 @@ speed_reset_threshold: 10
 - `1.0.1`: Fixed speed error bug.
 - `1.0.2`: Fixed speed error bug.
 - `1.0.3`: Added hysteresis thresholds (set/reset) for speed detection.
-- `1.0.4`: Improved speed derivation with anti-jitter GPS filters. Current release.
+- `1.0.4`: Improved speed derivation with anti-jitter GPS filters.
+- `1.0.5`: Added sustained-movement requirement to reduce false In transit detection. Current release.
 
 ---
 

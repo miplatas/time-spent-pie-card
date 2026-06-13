@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.4
+ * time-spent-pie-card.js  — v1.0.5
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -9,13 +9,15 @@
  *  - v1.0.2: Fixed speed error bug.
  *  - v1.0.3: Add hysteresis thresholds (set/reset) for speed detection.
  *  - v1.0.4: Improve speed derivation with anti-jitter GPS filters.
+ *  - v1.0.5: Add sustained-movement requirement to reduce false In transit detection.
  *
- * CHANGES v1.0.4:
+ * CHANGES v1.0.5:
  *  - Speed is calculated with Haversine using source device_tracker history
  *    (native HA GPS), because that tracker does not store a "speed" attribute.
  *  - For each [cur → next] interval from person.*, tracker history is scanned
- *    for GPS positions inside that interval and max speed is computed.
- *    Hysteresis thresholds (set/reset) define when state becomes In transit.
+ *    for GPS positions inside that interval and motion metrics are computed.
+ *    Hysteresis thresholds (set/reset) plus sustained movement checks define
+ *    when state becomes In transit.
  *  - extractSpeed() is kept as a fallback for trackers exposing speed directly.
  *  - debug: true shows sourceId, counters, and sample positions on the card.
  */
@@ -74,12 +76,12 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Maximum speed (km/h) found in tracker history
+ * Motion metrics found in tracker history
  * within interval [startMs, endMs].
  * Calculates speed between consecutive position pairs.
  * Applies basic anti-jitter filters so thresholds remain realistic.
  */
-function maxSpeedInInterval(trackerList, startMs, endMs) {
+function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
   const MIN_DT_SECONDS = 15;      // ignore very short intervals (GPS jitter)
   const MIN_DIST_METERS = 15;     // ignore tiny jumps (position noise)
   const MAX_PLAUSIBLE_KMH = 220;  // filter out unrealistic spikes
@@ -97,6 +99,8 @@ function maxSpeedInInterval(trackerList, startMs, endMs) {
   if (prev) relevant.unshift(prev);   // add context position
 
   let maxSpeed = 0;
+  let movingSeconds = 0;
+  let movingDistanceKm = 0;
   for (let i = 0; i < relevant.length - 1; i++) {
     const a   = relevant[i];
     const b   = relevant[i + 1];
@@ -117,8 +121,13 @@ function maxSpeedInInterval(trackerList, startMs, endMs) {
     const speedKmh = distKm / dtHours;
     if (speedKmh > MAX_PLAUSIBLE_KMH) continue;
     if (speedKmh > maxSpeed) maxSpeed = speedKmh;
+
+    if (speedKmh >= speedThreshold) {
+      movingSeconds += dtSeconds;
+      movingDistanceKm += distKm;
+    }
   }
-  return maxSpeed;
+  return { maxSpeed, movingSeconds, movingDistanceKm };
 }
 
 /** Fallback: explicit speed attribute (for trackers that expose it) */
@@ -361,7 +370,14 @@ class TimeSpentPieCard extends HTMLElement {
 
       // Priority 2: max Haversine speed from GPS tracker history
       if (speed < speedSetThreshold && trackerList.length > 1) {
-        speed = Math.max(speed, maxSpeedInInterval(trackerList, startMs, endMs));
+        const motion = analyzeIntervalMotion(trackerList, startMs, endMs, speedSetThreshold);
+
+        // Require sustained movement to avoid classifying long intervals from
+        // single GPS spikes. Either 60s above threshold or ~300m moving.
+        const sustainedMotion = motion.movingSeconds >= 60 || motion.movingDistanceKm >= 0.3;
+        if (sustainedMotion) {
+          speed = Math.max(speed, motion.maxSpeed);
+        }
       }
 
       if (speed >= speedSetThreshold) {
