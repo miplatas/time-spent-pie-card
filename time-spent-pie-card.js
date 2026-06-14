@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.7
+ * time-spent-pie-card.js  — v1.0.8
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -22,6 +22,13 @@
  *            60 km/h showed as ~16.7 km/h). Now defaults these specific keys to m/s.
  *            Haversine-based position-derived speed (analyzeIntervalMotion) was already
  *            correct and unaffected.
+ *  - v1.0.8: Fix the live "State" pill showing "Away" while driving for trackers
+ *            (e.g. Life360) that never expose a speed attribute, so extractSpeed()
+ *            always returned 0 and the live state never crossed into "In transit".
+ *            The card now caches the GPS tracker history fetched once per minute and,
+ *            when no usable speed attribute is present, derives a live speed from the
+ *            most recent samples (median speed + 200 m moving-distance requirement,
+ *            ignored if the tracker hasn't reported in the last 3 minutes).
  *
  * CHANGES v1.0.6:
  *  - ROOT CAUSE FIX: removed shared `drivingActive` hysteresis variable that persisted
@@ -249,6 +256,7 @@ class TimeSpentPieCard extends HTMLElement {
     this._hass          = null;
     this._chartInstance = null;
     this._lastFetch     = 0;
+    this._trackerList   = [];
     this._buildSkeleton();
   }
 
@@ -344,6 +352,29 @@ class TimeSpentPieCard extends HTMLElement {
     if (speed <= 0 && sourceId && hass?.states?.[sourceId]) {
       speed = extractSpeed(hass.states[sourceId]);
     }
+
+    const speedSetThreshold = this._config?.speed_set_threshold ?? 15;
+
+    // Fallback: many trackers (e.g. Life360) never expose a speed attribute,
+    // so the explicit-attribute lookup above always returns 0. Derive a live
+    // speed estimate from the most recent cached GPS history samples instead.
+    if ((!Number.isFinite(speed) || speed < speedSetThreshold) &&
+        Array.isArray(this._trackerList) && this._trackerList.length >= 2) {
+      const recent = this._trackerList.slice(-6);
+      const lastTs = stateTs(recent[recent.length - 1]);
+
+      // Ignore stale history (tracker hasn't reported in a while -> not moving).
+      const STALE_MS = 3 * 60 * 1000;
+      if (Date.now() - lastTs <= STALE_MS) {
+        const t0 = stateTs(recent[0]);
+        const t1 = lastTs;
+        const motion = analyzeIntervalMotion(recent, t0 - 1, t1 + 1, speedSetThreshold);
+        if (motion.medianSpeed >= speedSetThreshold && motion.movingDistanceKm >= 0.2) {
+          speed = motion.medianSpeed;
+        }
+      }
+    }
+
     return Number.isFinite(speed) && speed >= 0 ? speed : NaN;
   }
 
@@ -408,6 +439,12 @@ class TimeSpentPieCard extends HTMLElement {
           if (tl.length > trackerList.length) trackerList = tl; // use richest history
         } catch (_) { /* ignore failures */ }
       }
+
+      // Cache for the live "State"/"Speed" pills, which run on every hass
+      // update (not just the once-per-minute history fetch) and need a
+      // position-derived speed fallback for trackers without a speed attribute.
+      this._trackerList = trackerList;
+      this._updateCurrentInfo(entityState, hass);
 
       if (debug) {
         const sample = trackerList.slice(0, 3).map(s => ({
