@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.6
+ * time-spent-pie-card.js  — v1.0.7
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -14,6 +14,14 @@
  *            independently using median speed + minimum distance requirement; remove
  *            shared drivingActive state that caused sticky In transit across intervals;
  *            enforce MAX_DT_SECONDS=300 per GPS pair to suppress stale-ping speed errors.
+ *  - v1.0.7: ROOT CAUSE FIX — generic "speed"/"velocity"/"gps_speed" attributes reported
+ *            by native GPS device trackers (HA Companion App, OwnTracks, etc.) are in
+ *            m/s, per the underlying Android/iOS location APIs. inferSpeedUnit() was
+ *            defaulting these (when no unit attribute was present) to km/h, causing
+ *            extractSpeed() to under-report real-world speed by ~3.6x (e.g. a real
+ *            60 km/h showed as ~16.7 km/h). Now defaults these specific keys to m/s.
+ *            Haversine-based position-derived speed (analyzeIntervalMotion) was already
+ *            correct and unaffected.
  *
  * CHANGES v1.0.6:
  *  - ROOT CAUSE FIX: removed shared `drivingActive` hysteresis variable that persisted
@@ -65,6 +73,48 @@ function getRangeStart(timeRange) {
 }
 
 function msToHours(ms) { return ms / 3_600_000; }
+
+function speedToKmh(value, unit) {
+  if (!Number.isFinite(value)) return 0;
+  const u = String(unit || "").trim().toLowerCase();
+
+  if (u === "" || u === "km/h" || u === "kmh" || u === "kph") return value;
+  if (u === "m/s" || u === "ms" || u === "mps") return value * 3.6;
+  if (u === "mph" || u === "mi/h" || u === "mih") return value * 1.609344;
+  if (u === "kn" || u === "knot" || u === "knots") return value * 1.852;
+
+  // Unknown unit: preserve current behavior and assume km/h
+  return value;
+}
+
+function inferSpeedUnit(attrs, key) {
+  const candidateUnits = [
+    attrs?.[`${key}_unit`],
+    attrs?.[`${key}Unit`],
+    attrs?.speed_unit,
+    attrs?.speedUnit,
+    attrs?.speed_uom,
+    attrs?.unit_of_measurement,
+    attrs?.unit,
+  ];
+
+  if (key.includes("mph")) return "mph";
+  if (key.includes("kmh") || key.includes("km_h")) return "km/h";
+  if (key.includes("mps") || key.includes("m_s") || key.includes("speed_ms")) return "m/s";
+
+  for (const unit of candidateUnits) {
+    if (typeof unit === "string" && unit.trim() !== "") return unit;
+  }
+
+  // Generic "speed"/"velocity"/"gps_speed" attributes (no explicit unit hint)
+  // come almost exclusively from native GPS device trackers (HA Companion App
+  // on Android/iOS, OwnTracks, etc.), whose location APIs report speed in m/s.
+  // Defaulting these to km/h previously caused a ~3.6x underestimation
+  // (e.g. 16.7 m/s real speed showing as 16.7 km/h instead of ~60 km/h).
+  if (["speed", "Speed", "velocity", "gps_speed"].includes(key)) return "m/s";
+
+  return "km/h";
+}
 
 /** Timestamp in ms for a history state (supports full and minimal format) */
 function stateTs(s) {
@@ -152,8 +202,12 @@ function extractSpeed(stateObj) {
   const a = stateObj.attributes || stateObj.a || {};
   for (const k of ["speed","Speed","velocity","gps_speed","km_h","mph","speed_kmh","speed_mph"]) {
     const v = a[k];
-    if (typeof v === "number" && !isNaN(v)) return v;
-    if (typeof v === "string" && v !== "" && !isNaN(Number(v))) return Number(v);
+    if (typeof v === "number" && !isNaN(v)) {
+      return speedToKmh(v, inferSpeedUnit(a, k));
+    }
+    if (typeof v === "string" && v !== "" && !isNaN(Number(v))) {
+      return speedToKmh(Number(v), inferSpeedUnit(a, k));
+    }
   }
   return 0;
 }
@@ -272,7 +326,10 @@ class TimeSpentPieCard extends HTMLElement {
       </div>`;
   }
 
-  _getCurrentStateLabel(entityState, hass) {
+  _getCurrentStateLabel(entityState, hass, currentSpeedKmh) {
+    const threshold = this._config?.speed_set_threshold ?? 15;
+    if (Number.isFinite(currentSpeedKmh) && currentSpeedKmh >= threshold) return "In transit";
+
     const state = entityState?.state;
     if (!state || state === "unknown" || state === "unavailable") return "Unknown";
     if (state === "home") return "Home";
@@ -280,23 +337,28 @@ class TimeSpentPieCard extends HTMLElement {
     return getZoneName(hass, state);
   }
 
-  _getCurrentSpeedLabel(entityState, hass) {
+  _getCurrentSpeedKmh(entityState, hass) {
     let speed = extractSpeed(entityState);
     const sourceId = entityState?.attributes?.source ||
                      entityState?.attributes?.source_entity_id || null;
     if (speed <= 0 && sourceId && hass?.states?.[sourceId]) {
       speed = extractSpeed(hass.states[sourceId]);
     }
-    if (!Number.isFinite(speed) || speed < 0) return "-";
-    return `${speed.toFixed(1)} km/h`;
+    return Number.isFinite(speed) && speed >= 0 ? speed : NaN;
+  }
+
+  _getCurrentSpeedLabel(currentSpeedKmh) {
+    if (!Number.isFinite(currentSpeedKmh) || currentSpeedKmh < 0) return "-";
+    return `${currentSpeedKmh.toFixed(1)} km/h`;
   }
 
   _updateCurrentInfo(entityState, hass) {
     const stateEl = this.shadowRoot.getElementById("currentState");
     const speedEl = this.shadowRoot.getElementById("currentSpeed");
     if (!stateEl || !speedEl) return;
-    stateEl.textContent = this._getCurrentStateLabel(entityState, hass);
-    speedEl.textContent = this._getCurrentSpeedLabel(entityState, hass);
+    const speedKmh = this._getCurrentSpeedKmh(entityState, hass);
+    stateEl.textContent = this._getCurrentStateLabel(entityState, hass, speedKmh);
+    speedEl.textContent = this._getCurrentSpeedLabel(speedKmh);
   }
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
