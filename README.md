@@ -51,7 +51,6 @@ time_range: daily               # Required - "daily" or "weekly"
 chart_type: doughnut            # Optional - "doughnut" or "pie" (default: doughnut)
 speed_set_threshold: 15         # Optional - km/h to enter "In transit" (default: 15)
 speed_reset_threshold: 10       # Optional - km/h to exit "In transit" (default: speed_set_threshold)
-debug: false                    # Optional - show debug details on the card
 ```
 
 ### Parameters
@@ -64,7 +63,6 @@ debug: false                    # Optional - show debug details on the card
 | `chart_type`            | string  | No       | `doughnut`               | Chart style: `doughnut` or `pie` |
 | `speed_set_threshold`   | number  | No       | `15`                     | Speed (km/h) at or above which In transit starts |
 | `speed_reset_threshold` | number  | No       | `speed_set_threshold`    | Speed (km/h) at or below which In transit ends |
-| `debug`                 | boolean | No       | `false`                  | Shows debug details (source, tracker counts, sample points) |
 | `speed_threshold`       | number  | No       | Legacy fallback          | Backward-compatible fallback used when `speed_set_threshold` is not provided |
 
 ### Parameter Details
@@ -92,8 +90,6 @@ Derived-motion safeguards used internally:
 - Minimum movement between samples: `15 m`
 - Maximum plausible speed cap: `220 km/h`
 - Sustained movement requirement to classify `In transit`: at least `60 s` above set threshold or about `300 m` of above-threshold movement
-- `debug`:
-  Shows an additional debug box with source tracker id, tracker counts, and sample tracker points.
 - `speed_threshold` (legacy):
   Backward-compatible fallback only. When `speed_set_threshold` is not set, this value is used as the set threshold.
 
@@ -165,19 +161,6 @@ cards:
     chart_type: doughnut
 ```
 
-### Debug Example (Troubleshooting)
-
-```yaml
-type: custom:time-spent-pie-card
-entity: person.person2
-name: Person 2 Debug
-time_range: daily
-chart_type: doughnut
-speed_set_threshold: 15
-speed_reset_threshold: 10
-debug: true
-```
-
 ### Example From This Configuration
 
 ```yaml
@@ -190,34 +173,14 @@ speed_reset_threshold: 5
 chart_type: doughnut
 ```
 
-### Legacy Compatibility Example
-
-```yaml
-type: custom:time-spent-pie-card
-entity: person.person1
-time_range: daily
-speed_threshold: 15
-```
-
 ### Recommended Hysteresis Values
 
 ```yaml
 type: custom:time-spent-pie-card
 entity: person.person1
 time_range: daily
-speed_set_threshold: 15
-speed_reset_threshold: 10
-```
-
----
-
-## Repository Structure
-
-```
-.
-|-- time-spent-pie-card.js   # Main card code
-|-- hacs.json                # HACS manifest
-`-- README.md
+speed_set_threshold: 20
+speed_reset_threshold: 5
 ```
 
 ---
@@ -229,25 +192,6 @@ speed_reset_threshold: 10
 - History refresh is limited to **once per minute** to avoid overloading the API.
 - States with accumulated `0 h` are omitted from both the chart and stats chips.
 - Total accumulated hours are displayed below the chart.
-
----
-
-## Changelog
-
-- `1.0.0`: Initial release.
-- `1.0.1`: Fixed speed error bug.
-- `1.0.2`: Fixed speed error bug.
-- `1.0.3`: Added hysteresis thresholds (set/reset) for speed detection.
-- `1.0.4`: Improved speed derivation with anti-jitter GPS filters.
-- `1.0.5`: Added sustained-movement requirement to reduce false In transit detection.
-- `1.0.6`: Fixed persistent false In transit positives. Each interval is now evaluated independently using median speed + minimum distance (200 m) requirement. Removed shared hysteresis state that caused entire days to be classified as In transit after a single GPS spike. Added MAX_DT_SECONDS guard on GPS pairs to suppress stale-ping errors.
-- `1.0.7`: Fixed speed under-reporting (~3.6x too low) for native GPS device trackers (HA Companion App, OwnTracks, etc.). Their `speed`/`velocity`/`gps_speed` attributes are reported in m/s by the underlying Android/iOS location APIs but were being treated as km/h when no unit attribute was present. Now correctly assumed to be m/s for those attributes.
-- `1.0.8`: Fixed the live "State" pill showing "Away"/"Home" instead of "In transit" while driving for trackers (e.g. Life360) that don't expose a speed attribute. The live pill now falls back to a position-derived speed estimate from the most recently cached GPS history (median speed + 200 m moving-distance check, ignored if the last sample is older than 3 minutes).
-- `1.0.9`: Fixed donut history classification so long `not_home` intervals are split into actual `In transit` time plus remaining `Away` time, avoiding all-day false `In transit` blocks near threshold boundaries (e.g. 32 vs 33 km/h). Also fixed the visual editor output to always include `type: custom:time-spent-pie-card`.
-- `1.0.10`: Updated default speed set and reset thresholds to 20 and 5 km/h.
-- `1.0.11`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning.
-- `1.0.12`: Added a debug historical state-vs-time graph at the bottom (debug mode), Added a dedicated state history bar block below the debug chart. 
-- `1.0.13`: Update location of debug timeline graph to the top. **Current release.**
 
 ---
 

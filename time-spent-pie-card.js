@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.13
+ * time-spent-pie-card.js  — v1.0.14
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -41,7 +41,8 @@
  *            classification based on interval splitting.
  *  - v1.0.12: Added a debug historical state-vs-time graph at the bottom (debug mode), 
  *            Added a dedicated state history bar block below the debug chart.
- *  - v1.0.13: Update location of debug timeline graph to the top.
+ *  - v1.0.14: Eliminate(debug mode). 
+ */
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
 function loadChartJs() {
@@ -257,11 +258,9 @@ class TimeSpentPieCard extends HTMLElement {
       speed_set_threshold: speedSetThreshold,
       speed_reset_threshold: speedResetThreshold,
       chart_type:      config.chart_type || "doughnut",
-      debug:           config.debug ?? false,
     };
     this._hass          = null;
     this._chartInstance = null;
-    this._debugChartInstance = null;
     this._lastFetch     = 0;
     this._trackerList   = [];
     this._buildSkeleton();
@@ -318,14 +317,6 @@ class TimeSpentPieCard extends HTMLElement {
         .center-unit{font-size:.7rem;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.05em}
         .loading-msg,.error-msg{text-align:center;color:var(--secondary-text-color);font-size:.85rem;padding:20px 0}
         .error-msg{color:var(--error-color,#e53935)}
-        .debug-box{font-size:.62rem;color:var(--secondary-text-color);background:rgba(0,0,0,.08);border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;display:none;margin:0}
-        .debug-timeline-wrap{display:none;margin-top:4px;background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:8px;padding:8px}
-        .debug-timeline-title{font-size:.68rem;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px}
-        .debug-timeline-canvas{width:100%;height:170px}
-        .debug-statebar-wrap{display:none;margin-top:4px;background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:8px;padding:8px}
-        .debug-statebar{display:flex;height:14px;border-radius:999px;overflow:hidden;background:rgba(0,0,0,.12)}
-        .debug-statebar-seg{height:100%}
-        .debug-statebar-last{margin-top:6px;font-size:.68rem;color:var(--secondary-text-color)}
       </style>
       <div class="card-root">
         <p class="card-title"  id="title">Loading...</p>
@@ -334,11 +325,6 @@ class TimeSpentPieCard extends HTMLElement {
           <div class="top-pill"><span class="top-key">Speed</span><span class="top-val" id="currentSpeed">-</span></div>
         </div>
         <p class="card-subtitle" id="subtitle"></p>
-        <div class="debug-statebar-wrap" id="debugStateBarWrap">
-          <p class="debug-timeline-title">State bar (debug)</p>
-          <div class="debug-statebar" id="debugStateBar"></div>
-          <div class="debug-statebar-last" id="debugStateBarLast"></div>
-        </div>
         <div class="stats-grid" id="stats"></div>
         <div class="chart-wrapper" id="chartWrapper" style="display:none">
           <canvas id="pieCanvas"></canvas>
@@ -349,11 +335,6 @@ class TimeSpentPieCard extends HTMLElement {
         </div>
         <div class="loading-msg" id="loadingMsg">Fetching history...</div>
         <div class="error-msg"   id="errorMsg"   style="display:none"></div>
-        <pre class="debug-box"   id="debugBox"></pre>
-        <div class="debug-timeline-wrap" id="debugTimelineWrap">
-          <p class="debug-timeline-title">State history (debug)</p>
-          <canvas id="debugTimelineCanvas" class="debug-timeline-canvas"></canvas>
-        </div>
       </div>`;
   }
 
@@ -418,7 +399,7 @@ class TimeSpentPieCard extends HTMLElement {
   // ── Fetch ────────────────────────────────────────────────────────────────────
   async _fetchAndRender() {
     if (!this._hass || !this._config) return;
-    const { entity, name, time_range, speed_set_threshold, speed_reset_threshold, debug } = this._config;
+    const { entity, name, time_range, speed_set_threshold, speed_reset_threshold } = this._config;
     const hass = this._hass;
 
     const entityState = hass.states[entity];
@@ -469,52 +450,12 @@ class TimeSpentPieCard extends HTMLElement {
       this._trackerList = trackerList;
       this._updateCurrentInfo(entityState, hass);
 
-      const dbBox = this.shadowRoot.getElementById("debugBox");
-      if (debug) {
-        const sample = trackerList.slice(0, 3).map(s => ({
-          ts:    new Date(stateTs(s)).toLocaleTimeString(),
-          state: s.s ?? s.state,
-          lat:   (s.attributes||s.a||{}).latitude,
-          lon:   (s.attributes||s.a||{}).longitude,
-          speed_attr: extractSpeed(s),
-        }));
-        // Sample motion analysis on the first person interval for diagnostic
-        const firstInterval = personList[0];
-        const secondInterval = personList[1];
-        let motionSample = null;
-        if (firstInterval && secondInterval) {
-          const t0 = stateTs(firstInterval);
-          const t1 = stateTs(secondInterval);
-          motionSample = analyzeIntervalMotion(trackerList, t0, t1, speed_set_threshold);
-        }
-        dbBox.style.display = "";
-        dbBox.textContent =
-          `source: ${sourceId}\ntrackers tried: ${allTrackers.join(", ")}\n` +
-          `person states: ${personList.length} | tracker states: ${trackerList.length}\n` +
-          `speed_set: ${speed_set_threshold} | speed_reset: ${speed_reset_threshold}\n` +
-          (motionSample ? `1st interval motion: medianSpd=${motionSample.medianSpeed.toFixed(1)} km/h movingDist=${(motionSample.movingDistanceKm*1000).toFixed(0)} m\n` : '') +
-          `tracker sample:\n${JSON.stringify(sample, null, 2)}`;
-      } else {
-        dbBox.style.display = "none";
-        dbBox.textContent = "";
-        this._clearDebugTimeline();
-      }
-
-      const { segments, timeline } = this._processHistory(
+      const segments = this._processHistory(
         personList, trackerList, hass, speed_set_threshold, speed_reset_threshold
       );
 
       await this._renderChart(segments);
       this._renderStats(segments);
-      if (debug) {
-        const tStart = rangeStart.getTime();
-        const tEnd = Date.now();
-        const debugTimeline = (Array.isArray(timeline) && timeline.length > 0)
-          ? timeline
-          : this._buildRawTimeline(personList, hass, tStart, tEnd);
-        this._renderDebugStateBar(debugTimeline, tStart, tEnd);
-        await this._renderDebugTimeline(debugTimeline, tStart, tEnd);
-      }
       this._hideMessages();
     } catch (err) {
       console.error("[time-spent-pie-card]", err);
@@ -525,7 +466,6 @@ class TimeSpentPieCard extends HTMLElement {
   // ── Processing ───────────────────────────────────────────────────────────────
   _processHistory(personList, trackerList, hass, speedSetThreshold, speedResetThreshold) {
     const acc = {};
-    const timeline = [];
 
     // Minimum GPS distance that must be covered above the threshold within the
     // interval to count it as In transit (avoids classifying brief/noisy GPS
@@ -536,12 +476,6 @@ class TimeSpentPieCard extends HTMLElement {
       if (hours <= 0) return;
       if (!acc[label]) acc[label] = { hours: 0, color };
       acc[label].hours += hours;
-    };
-
-    const addInterval = (label, color, startMs, endMs) => {
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
-      addHours(label, color, msToHours(endMs - startMs));
-      timeline.push({ label, startMs, endMs });
     };
 
     for (let i = 0; i < personList.length; i++) {
@@ -565,43 +499,34 @@ class TimeSpentPieCard extends HTMLElement {
       }
 
       if (s === "not_home") {
-        // Split not_home time using above-threshold GPS windows to visualize
-        // Away vs In transit over the selected time range.
+        // Split not_home time: only moving slices become In transit; remainder stays Away.
+        let transitH = 0;
         if (motion) {
-          const windows = this._mergeMovingWindows(motion.movingWindows, startMs, endMs);
-          if (windows.length > 0) {
-            let cursor = startMs;
-            for (const w of windows) {
-              if (w.startMs > cursor) addInterval("Away", null, cursor, w.startMs);
-              addInterval("In transit", DRIVING_COLOR, w.startMs, w.endMs);
-              cursor = Math.max(cursor, w.endMs);
-            }
-            if (cursor < endMs) addInterval("Away", null, cursor, endMs);
-            continue;
-          }
+          transitH = Math.min(deltaH, msToHours(motion.movingSeconds * 1000));
         }
 
-        // Fallback for setups without tracker history windows.
-        const speed = extractSpeed(cur);
-        if (speed >= speedSetThreshold) {
-          addInterval("In transit", DRIVING_COLOR, startMs, endMs);
-        } else {
-          addInterval("Away", null, startMs, endMs);
+        // Fallback for setups without tracker history: keep legacy behavior.
+        if (!motion) {
+          const speed = extractSpeed(cur);
+          if (speed >= speedSetThreshold) transitH = deltaH;
         }
+
+        addHours("In transit", DRIVING_COLOR, transitH);
+        addHours("Away", null, deltaH - transitH);
         continue;
       }
 
       if (s === "home") {
-        addInterval("Home", HOME_COLOR, startMs, endMs);
+        addHours("Home", HOME_COLOR, deltaH);
         continue;
       }
 
       if (s === "unknown" || s === "unavailable") {
-        addInterval("Unknown", UNKNOWN_COLOR, startMs, endMs);
+        addHours("Unknown", UNKNOWN_COLOR, deltaH);
         continue;
       }
 
-      addInterval(getZoneName(hass, s), null, startMs, endMs);
+      addHours(getZoneName(hass, s), null, deltaH);
     }
 
     // Assign colors to custom zones
@@ -620,63 +545,7 @@ class TimeSpentPieCard extends HTMLElement {
       segments.push({ label, hours: data.hours, color: c });
     }
     segments.sort((a, b) => b.hours - a.hours);
-    const colorByLabel = new Map(segments.map(s => [s.label, s.color]));
-    const timelineWithColor = timeline.map(x => ({
-      ...x,
-      color: colorByLabel.get(x.label) || UNKNOWN_COLOR,
-    }));
-    return { segments, timeline: timelineWithColor };
-  }
-
-  _mergeMovingWindows(windows, startMs, endMs) {
-    if (!Array.isArray(windows) || windows.length === 0) return [];
-
-    const clamped = windows
-      .map(w => ({
-        startMs: Math.max(startMs, Number(w.startMs)),
-        endMs: Math.min(endMs, Number(w.endMs)),
-      }))
-      .filter(w => Number.isFinite(w.startMs) && Number.isFinite(w.endMs) && w.endMs > w.startMs)
-      .sort((a, b) => a.startMs - b.startMs);
-
-    if (clamped.length === 0) return [];
-
-    const merged = [clamped[0]];
-    for (let i = 1; i < clamped.length; i++) {
-      const cur = clamped[i];
-      const last = merged[merged.length - 1];
-      if (cur.startMs <= last.endMs) {
-        last.endMs = Math.max(last.endMs, cur.endMs);
-      } else {
-        merged.push(cur);
-      }
-    }
-    return merged;
-  }
-
-  _buildRawTimeline(personList, hass, startMs, endMs) {
-    const out = [];
-    if (!Array.isArray(personList) || personList.length === 0) return out;
-
-    for (let i = 0; i < personList.length; i++) {
-      const cur = personList[i];
-      const next = personList[i + 1];
-      const sMs = Math.max(startMs, stateTs(cur));
-      const eMs = Math.min(endMs, next ? stateTs(next) : Date.now());
-      if (!Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) continue;
-
-      const s = cur.s ?? cur.state ?? "unknown";
-      if (s === "home") {
-        out.push({ label: "Home", color: HOME_COLOR, startMs: sMs, endMs: eMs });
-      } else if (s === "not_home") {
-        out.push({ label: "Away", color: SEGMENT_COLORS[0], startMs: sMs, endMs: eMs });
-      } else if (s === "unknown" || s === "unavailable") {
-        out.push({ label: "Unknown", color: UNKNOWN_COLOR, startMs: sMs, endMs: eMs });
-      } else {
-        out.push({ label: getZoneName(hass, s), color: SEGMENT_COLORS[1], startMs: sMs, endMs: eMs });
-      }
-    }
-    return out;
+    return segments;
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -722,258 +591,6 @@ class TimeSpentPieCard extends HTMLElement {
       this._chartType = chartType;
     }
     this.shadowRoot.getElementById("chartWrapper").style.display = "";
-  }
-
-  async _renderDebugTimeline(timeline, startMs, endMs) {
-    const wrap = this.shadowRoot.getElementById("debugTimelineWrap");
-    const canvas = this.shadowRoot.getElementById("debugTimelineCanvas");
-    if (!wrap || !canvas) return;
-
-    if (!Array.isArray(timeline) || timeline.length === 0) {
-      this._clearDebugTimeline();
-      return;
-    }
-
-    const Chart = await loadChartJs();
-    const orderedTimeline = [...timeline].sort((a, b) => a.startMs - b.startMs);
-    const uniqueLabels = [...new Set(orderedTimeline.map(x => x.label))];
-    const preferred = ["Unknown", "Home", "Away", "In transit"];
-    const stateLabels = [
-      ...preferred.filter(x => uniqueLabels.includes(x)),
-      ...uniqueLabels.filter(x => !preferred.includes(x)).sort(),
-    ];
-    const idxByLabel = new Map(stateLabels.map((label, idx) => [label, idx]));
-    const colorByLabel = new Map();
-    for (const x of orderedTimeline) {
-      if (x.color && !colorByLabel.has(x.label)) colorByLabel.set(x.label, x.color);
-    }
-
-    const points = [];
-    for (const x of orderedTimeline) {
-      const y = idxByLabel.get(x.label);
-      if (!Number.isFinite(y)) continue;
-      points.push({ x: x.startMs, y });
-      points.push({ x: x.endMs, y });
-    }
-
-    if (points.length === 0) {
-      this._clearDebugTimeline();
-      return;
-    }
-
-    const isWeekly = this._config?.time_range === "weekly";
-    const tickFmt = new Intl.DateTimeFormat(undefined, isWeekly
-      ? { weekday: "short", hour: "2-digit", minute: "2-digit" }
-      : { hour: "2-digit", minute: "2-digit" });
-
-    const withAlpha = (hexColor, alpha) => {
-      if (typeof hexColor !== "string") return `rgba(120, 144, 156, ${alpha})`;
-      const hex = hexColor.trim();
-      const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
-      if (!m) return `rgba(120, 144, 156, ${alpha})`;
-      const n = parseInt(m[1], 16);
-      const r = (n >> 16) & 255;
-      const g = (n >> 8) & 255;
-      const b = n & 255;
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    };
-
-    const stateBandPlugin = {
-      id: "stateBandBackground",
-      beforeDatasetsDraw: chart => {
-        const { ctx, chartArea, scales } = chart;
-        const yScale = scales?.y;
-        if (!chartArea || !yScale) return;
-        const { left, right, top, bottom } = chartArea;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(left, top, right - left, bottom - top);
-        ctx.clip();
-
-        for (let i = 0; i < stateLabels.length; i++) {
-          const yTop = yScale.getPixelForValue(i - 0.5);
-          const yBottom = yScale.getPixelForValue(i + 0.5);
-          const bandTop = Math.max(top, Math.min(yTop, yBottom));
-          const bandBottom = Math.min(bottom, Math.max(yTop, yBottom));
-          if (bandBottom <= bandTop) continue;
-
-          const baseColor = colorByLabel.get(stateLabels[i]) || UNKNOWN_COLOR;
-          ctx.fillStyle = withAlpha(baseColor, 0.12);
-          ctx.fillRect(left, bandTop, right - left, bandBottom - bandTop);
-        }
-        ctx.restore();
-      },
-    };
-
-    const historyBarPlugin = {
-      id: "historyBarOverlay",
-      beforeDatasetsDraw: chart => {
-        const { ctx, chartArea, scales } = chart;
-        const xScale = scales?.x;
-        const yScale = scales?.y;
-        if (!chartArea || !xScale || !yScale) return;
-
-        const { left, right, top, bottom } = chartArea;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(left, top, right - left, bottom - top);
-        ctx.clip();
-
-        for (const seg of orderedTimeline) {
-          const idx = idxByLabel.get(seg.label);
-          if (!Number.isFinite(idx)) continue;
-
-          const start = Math.max(startMs, Number(seg.startMs));
-          const end = Math.min(endMs, Number(seg.endMs));
-          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-
-          const x0 = xScale.getPixelForValue(start);
-          const x1 = xScale.getPixelForValue(end);
-          const leftPx = Math.max(left, Math.min(x0, x1));
-          const rightPx = Math.min(right, Math.max(x0, x1));
-          if (rightPx <= leftPx) continue;
-
-          const yTop = yScale.getPixelForValue(idx - 0.32);
-          const yBottom = yScale.getPixelForValue(idx + 0.32);
-          const segTop = Math.max(top, Math.min(yTop, yBottom));
-          const segBottom = Math.min(bottom, Math.max(yTop, yBottom));
-          if (segBottom <= segTop) continue;
-
-          const baseColor = seg.color || colorByLabel.get(seg.label) || UNKNOWN_COLOR;
-          ctx.fillStyle = withAlpha(baseColor, 0.72);
-          ctx.fillRect(leftPx, segTop, rightPx - leftPx, segBottom - segTop);
-        }
-
-        ctx.restore();
-      },
-    };
-
-    if (this._debugChartInstance) this._debugChartInstance.destroy();
-    this._debugChartInstance = new Chart(canvas, {
-      type: "line",
-      plugins: [stateBandPlugin, historyBarPlugin],
-      data: {
-        datasets: [{
-          data: points,
-          parsing: false,
-          stepped: true,
-          borderColor: "#263238",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: { duration: 250 },
-        interaction: { intersect: false, mode: "nearest" },
-        scales: {
-          x: {
-            type: "linear",
-            min: startMs,
-            max: endMs,
-            ticks: {
-              callback: value => tickFmt.format(new Date(Number(value))),
-              maxRotation: 0,
-              autoSkip: true,
-            },
-          },
-          y: {
-            min: -0.5,
-            max: stateLabels.length - 0.5,
-            ticks: {
-              stepSize: 1,
-              callback: value => stateLabels[Math.round(Number(value))] || "",
-            },
-          },
-        },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              title: items => {
-                const t = items?.[0]?.parsed?.x;
-                return Number.isFinite(t) ? tickFmt.format(new Date(t)) : "";
-              },
-              label: ctx => {
-                const idx = Math.round(ctx.parsed.y);
-                return ` ${stateLabels[idx] || "Unknown"}`;
-              },
-            },
-          },
-        },
-      },
-    });
-    wrap.style.display = "";
-  }
-
-  _clearDebugTimeline() {
-    if (this._debugChartInstance) {
-      this._debugChartInstance.destroy();
-      this._debugChartInstance = null;
-    }
-    const wrap = this.shadowRoot.getElementById("debugTimelineWrap");
-    if (wrap) wrap.style.display = "none";
-
-    const barWrap = this.shadowRoot.getElementById("debugStateBarWrap");
-    const bar = this.shadowRoot.getElementById("debugStateBar");
-    const last = this.shadowRoot.getElementById("debugStateBarLast");
-    if (barWrap) barWrap.style.display = "none";
-    if (bar) bar.innerHTML = "";
-    if (last) last.textContent = "";
-  }
-
-  _renderDebugStateBar(timeline, startMs, endMs) {
-    const wrap = this.shadowRoot.getElementById("debugStateBarWrap");
-    const bar = this.shadowRoot.getElementById("debugStateBar");
-    const last = this.shadowRoot.getElementById("debugStateBarLast");
-    if (!wrap || !bar || !last) return;
-
-    if (!Array.isArray(timeline) || timeline.length === 0) {
-      wrap.style.display = "none";
-      bar.innerHTML = "";
-      last.textContent = "";
-      return;
-    }
-
-    const ordered = [...timeline]
-      .map(x => ({
-        label: x.label || "Unknown",
-        color: x.color || UNKNOWN_COLOR,
-        startMs: Math.max(startMs, Number(x.startMs)),
-        endMs: Math.min(endMs, Number(x.endMs)),
-      }))
-      .filter(x => Number.isFinite(x.startMs) && Number.isFinite(x.endMs) && x.endMs > x.startMs)
-      .sort((a, b) => a.startMs - b.startMs);
-
-    if (ordered.length === 0) {
-      wrap.style.display = "none";
-      bar.innerHTML = "";
-      last.textContent = "";
-      return;
-    }
-
-    bar.innerHTML = "";
-    const totalMs = Math.max(1, endMs - startMs);
-    for (const seg of ordered) {
-      const dur = Math.max(1, seg.endMs - seg.startMs);
-      const el = document.createElement("div");
-      el.className = "debug-statebar-seg";
-      const pct = Math.max((dur / totalMs) * 100, 0.5);
-      el.style.flex = "0 0 auto";
-      el.style.width = `${pct}%`;
-      el.style.background = seg.color;
-      const startTxt = new Date(seg.startMs).toLocaleTimeString();
-      const endTxt = new Date(seg.endMs).toLocaleTimeString();
-      el.title = `${seg.label} (${startTxt} - ${endTxt})`;
-      bar.appendChild(el);
-    }
-
-    const lastSeg = ordered[ordered.length - 1];
-    last.textContent = `Last state: ${lastSeg.label} @ ${new Date(lastSeg.endMs).toLocaleTimeString()}`;
-    wrap.style.display = "";
   }
 
   _renderStats(segments) {
@@ -1044,12 +661,8 @@ class TimeSpentPieCardEditor extends HTMLElement {
         </label>
         <label>Speed set threshold (km/h)<br><input id="speed_set_threshold" type="number" value="${this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 20}"></label>
         <label>Speed reset threshold (km/h)<br><input id="speed_reset_threshold" type="number" value="${this._config?.speed_reset_threshold ?? this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 5}"></label>
-        <label style="flex-direction:row;gap:8px;align-items:center">
-          <input id="debug" type="checkbox" style="width:auto" ${this._config?.debug?"checked":""}>
-          Debug mode
-        </label>
       </div>`;
-    for (const id of ["entity","name","time_range","chart_type","speed_set_threshold","speed_reset_threshold","debug"])
+    for (const id of ["entity","name","time_range","chart_type","speed_set_threshold","speed_reset_threshold"])
       this.shadowRoot.getElementById(id).addEventListener("change", () => this._fire());
   }
   _fire() {
@@ -1061,7 +674,6 @@ class TimeSpentPieCardEditor extends HTMLElement {
       chart_type:      sr.getElementById("chart_type").value,
       speed_set_threshold: Number(sr.getElementById("speed_set_threshold").value),
       speed_reset_threshold: Number(sr.getElementById("speed_reset_threshold").value),
-      debug:           sr.getElementById("debug").checked,
     };
     const n = sr.getElementById("name").value.trim();
     if (n) cfg.name = n;
