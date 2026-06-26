@@ -185,6 +185,17 @@ speed_reset_threshold: 5
 
 ---
 
+## Repository Structure
+
+```
+.
+|-- time-spent-pie-card.js   # Main card code
+|-- hacs.json                # HACS manifest
+`-- README.md
+```
+
+---
+
 ## Technical Notes
 
 - The card **does not require** additional sensors or helpers; it builds accumulators in real time directly from history.
