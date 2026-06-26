@@ -29,6 +29,11 @@
  *            when no usable speed attribute is present, derives a live speed from the
  *            most recent samples (median speed + 200 m moving-distance requirement,
  *            ignored if the tracker hasn't reported in the last 3 minutes).
+ *  - v1.0.9: Fix donut history classification to split long `not_home` intervals
+ *            into actual moving time (`In transit`) plus remaining `Away` time,
+ *            preventing all-day false `In transit` blocks near threshold boundaries
+ *            (e.g. 32 vs 33 km/h). Also ensure the visual editor always emits
+ *            `type: custom:time-spent-pie-card` in saved config.
  *
  * CHANGES v1.0.6:
  *  - ROOT CAUSE FIX: removed shared `drivingActive` hysteresis variable that persisted
@@ -240,9 +245,9 @@ class TimeSpentPieCard extends HTMLElement {
     if (config.chart_type && !["doughnut", "pie"].includes(config.chart_type))
       throw new Error("'chart_type' must be 'doughnut' or 'pie'.");
 
-    const legacySpeedThreshold = config.speed_threshold ?? 15;
+    const legacySpeedThreshold = config.speed_threshold ?? 20;
     const speedSetThreshold = config.speed_set_threshold ?? legacySpeedThreshold;
-    const speedResetThreshold = config.speed_reset_threshold ?? speedSetThreshold;
+    const speedResetThreshold = config.speed_reset_threshold ?? Math.min(5, speedSetThreshold);
     if (!Number.isFinite(speedSetThreshold) || !Number.isFinite(speedResetThreshold))
       throw new Error("'speed_set_threshold' and 'speed_reset_threshold' must be numbers.");
     if (speedResetThreshold > speedSetThreshold)
@@ -339,7 +344,7 @@ class TimeSpentPieCard extends HTMLElement {
   }
 
   _getCurrentStateLabel(entityState, hass, currentSpeedKmh) {
-    const threshold = this._config?.speed_set_threshold ?? 15;
+    const threshold = this._config?.speed_set_threshold ?? 20;
     if (Number.isFinite(currentSpeedKmh) && currentSpeedKmh >= threshold) return "In transit";
 
     const state = entityState?.state;
@@ -357,7 +362,7 @@ class TimeSpentPieCard extends HTMLElement {
       speed = extractSpeed(hass.states[sourceId]);
     }
 
-    const speedSetThreshold = this._config?.speed_set_threshold ?? 15;
+    const speedSetThreshold = this._config?.speed_set_threshold ?? 20;
 
     // Fallback: many trackers (e.g. Life360) never expose a speed attribute,
     // so the explicit-attribute lookup above always returns 0. Derive a live
@@ -648,8 +653,8 @@ class TimeSpentPieCard extends HTMLElement {
       type: "custom:time-spent-pie-card",
       entity: "person.user1",
       time_range: "daily",
-      speed_set_threshold: 15,
-      speed_reset_threshold: 10,
+      speed_set_threshold: 20,
+      speed_reset_threshold: 5,
       chart_type: "doughnut",
     };
   }
@@ -684,8 +689,8 @@ class TimeSpentPieCardEditor extends HTMLElement {
             <option value="pie" ${this._config?.chart_type==="pie"?"selected":""}>Pie</option>
           </select>
         </label>
-        <label>Speed set threshold (km/h)<br><input id="speed_set_threshold" type="number" value="${this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 15}"></label>
-        <label>Speed reset threshold (km/h)<br><input id="speed_reset_threshold" type="number" value="${this._config?.speed_reset_threshold ?? this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 15}"></label>
+        <label>Speed set threshold (km/h)<br><input id="speed_set_threshold" type="number" value="${this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 20}"></label>
+        <label>Speed reset threshold (km/h)<br><input id="speed_reset_threshold" type="number" value="${this._config?.speed_reset_threshold ?? this._config?.speed_set_threshold ?? this._config?.speed_threshold ?? 5}"></label>
         <label style="flex-direction:row;gap:8px;align-items:center">
           <input id="debug" type="checkbox" style="width:auto" ${this._config?.debug?"checked":""}>
           Debug mode
