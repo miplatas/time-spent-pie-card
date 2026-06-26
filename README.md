@@ -16,7 +16,7 @@ A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** wit
 - **Speed hysteresis filter**: use `speed_set_threshold` to enter In transit and `speed_reset_threshold` to leave In transit.
 - Speed estimation from GPS history includes anti-jitter filtering (minimum sample interval, minimum distance jump, and plausible speed cap).
 - In transit classification also requires sustained movement above threshold (time or distance), not only a single speed spike.
-- Automatically classifies `Home`, `In transit`, `Unknown`, and any custom HA zones.
+- Automatically classifies `Home`, `In transit`, `Away`, and any custom HA zones.
 - Shows live header pills for the person's **current state** and **current speed**.
 - Supports both **doughnut** and **pie** chart styles via configuration.
 - Adapts to light/dark themes using native HA CSS variables.
@@ -208,4 +208,4 @@ speed_reset_threshold: 5
 
 ## License
 
-GNU - Copyright (c) miplatas / FIME-UANL
+GNU.
