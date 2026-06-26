@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.9
+ * time-spent-pie-card.js  — v1.0.11
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -34,22 +34,11 @@
  *            preventing all-day false `In transit` blocks near threshold boundaries
  *            (e.g. 32 vs 33 km/h). Also ensure the visual editor always emits
  *            `type: custom:time-spent-pie-card` in saved config.
- *
- * CHANGES v1.0.6:
- *  - ROOT CAUSE FIX: removed shared `drivingActive` hysteresis variable that persisted
- *    across ALL person-state intervals — a single GPS spike early in the day caused the
- *    entire rest of the day to be classified as In transit until a reset event appeared.
- *  - Each person-state interval is now classified independently. An interval is In transit
- *    only when BOTH conditions hold for tracker samples strictly inside that interval:
- *      (a) median speed >= speed_set_threshold
- *      (b) total moving distance >= 200 m
- *  - analyzeIntervalMotion() now computes median speed (not max) — far more robust against
- *    occasional GPS satellite jumps.
- *  - Added MAX_DT_SECONDS=300 guard per GPS pair to exclude stale tracker pings that
- *    produced an unrealistically high (or low) speed from a large position gap.
- *  - Removed the `prev` context point that prepended a sample from before the interval
- *    start, which caused the first Δt to span an arbitrary large gap.
- *  - debug output now includes median speed and moving distance for the first interval.
+ *  - v1.0.10: Update speed set and reset thresholds to 20 and 5 km/h.
+ *  - v1.0.11: Add a debug historical state-vs-time graph (fixed to the
+ *            selected daily/weekly range) to calibrate Away vs In transit
+ *            threshold behavior. Includes colored state bands and timeline
+ *            classification based on interval splitting.
  */
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
@@ -170,11 +159,14 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
   });
 
   // Need at least two points to form a pair
-  if (relevant.length < 2) return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0 };
+  if (relevant.length < 2) {
+    return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0, movingWindows: [] };
+  }
 
   const speeds = [];
   let movingDistanceKm = 0;
   let movingSeconds = 0;
+  const movingWindows = [];
 
   for (let i = 0; i < relevant.length - 1; i++) {
     const a   = relevant[i];
@@ -198,10 +190,13 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
     if (speedKmh >= speedThreshold) {
       movingDistanceKm += distKm;
       movingSeconds += dtSeconds;
+      movingWindows.push({ startMs: stateTs(a), endMs: stateTs(b) });
     }
   }
 
-  if (speeds.length === 0) return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0 };
+  if (speeds.length === 0) {
+    return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0, movingWindows: [] };
+  }
 
   // Median is far more robust than max against occasional GPS jumps
   speeds.sort((a, b) => a - b);
@@ -210,7 +205,7 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
     ? (speeds[mid - 1] + speeds[mid]) / 2
     : speeds[mid];
 
-  return { medianSpeed, movingDistanceKm, movingSeconds };
+  return { medianSpeed, movingDistanceKm, movingSeconds, movingWindows };
 }
 
 /** Fallback: explicit speed attribute (for trackers that expose it) */
@@ -264,6 +259,7 @@ class TimeSpentPieCard extends HTMLElement {
     };
     this._hass          = null;
     this._chartInstance = null;
+    this._debugChartInstance = null;
     this._lastFetch     = 0;
     this._trackerList   = [];
     this._buildSkeleton();
@@ -321,6 +317,9 @@ class TimeSpentPieCard extends HTMLElement {
         .loading-msg,.error-msg{text-align:center;color:var(--secondary-text-color);font-size:.85rem;padding:20px 0}
         .error-msg{color:var(--error-color,#e53935)}
         .debug-box{font-size:.62rem;color:var(--secondary-text-color);background:rgba(0,0,0,.08);border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;display:none;margin:0}
+        .debug-timeline-wrap{display:none;margin-top:4px;background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:8px;padding:8px}
+        .debug-timeline-title{font-size:.68rem;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px}
+        .debug-timeline-canvas{width:100%;height:170px}
       </style>
       <div class="card-root">
         <p class="card-title"  id="title">Loading...</p>
@@ -340,6 +339,10 @@ class TimeSpentPieCard extends HTMLElement {
         <div class="loading-msg" id="loadingMsg">Fetching history...</div>
         <div class="error-msg"   id="errorMsg"   style="display:none"></div>
         <pre class="debug-box"   id="debugBox"></pre>
+        <div class="debug-timeline-wrap" id="debugTimelineWrap">
+          <p class="debug-timeline-title">State history (debug)</p>
+          <canvas id="debugTimelineCanvas" class="debug-timeline-canvas"></canvas>
+        </div>
       </div>`;
   }
 
@@ -455,6 +458,7 @@ class TimeSpentPieCard extends HTMLElement {
       this._trackerList = trackerList;
       this._updateCurrentInfo(entityState, hass);
 
+      const dbBox = this.shadowRoot.getElementById("debugBox");
       if (debug) {
         const sample = trackerList.slice(0, 3).map(s => ({
           ts:    new Date(stateTs(s)).toLocaleTimeString(),
@@ -472,7 +476,6 @@ class TimeSpentPieCard extends HTMLElement {
           const t1 = stateTs(secondInterval);
           motionSample = analyzeIntervalMotion(trackerList, t0, t1, speed_set_threshold);
         }
-        const dbBox = this.shadowRoot.getElementById("debugBox");
         dbBox.style.display = "";
         dbBox.textContent =
           `source: ${sourceId}\ntrackers tried: ${allTrackers.join(", ")}\n` +
@@ -480,14 +483,21 @@ class TimeSpentPieCard extends HTMLElement {
           `speed_set: ${speed_set_threshold} | speed_reset: ${speed_reset_threshold}\n` +
           (motionSample ? `1st interval motion: medianSpd=${motionSample.medianSpeed.toFixed(1)} km/h movingDist=${(motionSample.movingDistanceKm*1000).toFixed(0)} m\n` : '') +
           `tracker sample:\n${JSON.stringify(sample, null, 2)}`;
+      } else {
+        dbBox.style.display = "none";
+        dbBox.textContent = "";
+        this._clearDebugTimeline();
       }
 
-      const segments = this._processHistory(
+      const { segments, timeline } = this._processHistory(
         personList, trackerList, hass, speed_set_threshold, speed_reset_threshold
       );
 
       await this._renderChart(segments);
       this._renderStats(segments);
+      if (debug) {
+        await this._renderDebugTimeline(timeline, rangeStart.getTime(), Date.now());
+      }
       this._hideMessages();
     } catch (err) {
       console.error("[time-spent-pie-card]", err);
@@ -498,6 +508,7 @@ class TimeSpentPieCard extends HTMLElement {
   // ── Processing ───────────────────────────────────────────────────────────────
   _processHistory(personList, trackerList, hass, speedSetThreshold, speedResetThreshold) {
     const acc = {};
+    const timeline = [];
 
     // Minimum GPS distance that must be covered above the threshold within the
     // interval to count it as In transit (avoids classifying brief/noisy GPS
@@ -508,6 +519,12 @@ class TimeSpentPieCard extends HTMLElement {
       if (hours <= 0) return;
       if (!acc[label]) acc[label] = { hours: 0, color };
       acc[label].hours += hours;
+    };
+
+    const addInterval = (label, color, startMs, endMs) => {
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+      addHours(label, color, msToHours(endMs - startMs));
+      timeline.push({ label, startMs, endMs });
     };
 
     for (let i = 0; i < personList.length; i++) {
@@ -531,32 +548,43 @@ class TimeSpentPieCard extends HTMLElement {
       }
 
       if (s === "not_home") {
-        // Split not_home time: only moving slices become In transit; remainder stays Away.
-        let transitH = 0;
+        // Split not_home time using above-threshold GPS windows to visualize
+        // Away vs In transit over the selected time range.
         if (motion) {
-          transitH = Math.min(deltaH, msToHours(motion.movingSeconds * 1000));
-        } else {
-          // Fallback for setups without tracker history: keep legacy behavior.
-          const speed = extractSpeed(cur);
-          if (speed >= speedSetThreshold) transitH = deltaH;
+          const windows = this._mergeMovingWindows(motion.movingWindows, startMs, endMs);
+          if (windows.length > 0) {
+            let cursor = startMs;
+            for (const w of windows) {
+              if (w.startMs > cursor) addInterval("Away", null, cursor, w.startMs);
+              addInterval("In transit", DRIVING_COLOR, w.startMs, w.endMs);
+              cursor = Math.max(cursor, w.endMs);
+            }
+            if (cursor < endMs) addInterval("Away", null, cursor, endMs);
+            continue;
+          }
         }
 
-        addHours("In transit", DRIVING_COLOR, transitH);
-        addHours("Away", null, deltaH - transitH);
+        // Fallback for setups without tracker history windows.
+        const speed = extractSpeed(cur);
+        if (speed >= speedSetThreshold) {
+          addInterval("In transit", DRIVING_COLOR, startMs, endMs);
+        } else {
+          addInterval("Away", null, startMs, endMs);
+        }
         continue;
       }
 
       if (s === "home") {
-        addHours("Home", HOME_COLOR, deltaH);
+        addInterval("Home", HOME_COLOR, startMs, endMs);
         continue;
       }
 
       if (s === "unknown" || s === "unavailable") {
-        addHours("Unknown", UNKNOWN_COLOR, deltaH);
+        addInterval("Unknown", UNKNOWN_COLOR, startMs, endMs);
         continue;
       }
 
-      addHours(getZoneName(hass, s), null, deltaH);
+      addInterval(getZoneName(hass, s), null, startMs, endMs);
     }
 
     // Assign colors to custom zones
@@ -575,7 +603,38 @@ class TimeSpentPieCard extends HTMLElement {
       segments.push({ label, hours: data.hours, color: c });
     }
     segments.sort((a, b) => b.hours - a.hours);
-    return segments;
+    const colorByLabel = new Map(segments.map(s => [s.label, s.color]));
+    const timelineWithColor = timeline.map(x => ({
+      ...x,
+      color: colorByLabel.get(x.label) || UNKNOWN_COLOR,
+    }));
+    return { segments, timeline: timelineWithColor };
+  }
+
+  _mergeMovingWindows(windows, startMs, endMs) {
+    if (!Array.isArray(windows) || windows.length === 0) return [];
+
+    const clamped = windows
+      .map(w => ({
+        startMs: Math.max(startMs, Number(w.startMs)),
+        endMs: Math.min(endMs, Number(w.endMs)),
+      }))
+      .filter(w => Number.isFinite(w.startMs) && Number.isFinite(w.endMs) && w.endMs > w.startMs)
+      .sort((a, b) => a.startMs - b.startMs);
+
+    if (clamped.length === 0) return [];
+
+    const merged = [clamped[0]];
+    for (let i = 1; i < clamped.length; i++) {
+      const cur = clamped[i];
+      const last = merged[merged.length - 1];
+      if (cur.startMs <= last.endMs) {
+        last.endMs = Math.max(last.endMs, cur.endMs);
+      } else {
+        merged.push(cur);
+      }
+    }
+    return merged;
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -621,6 +680,157 @@ class TimeSpentPieCard extends HTMLElement {
       this._chartType = chartType;
     }
     this.shadowRoot.getElementById("chartWrapper").style.display = "";
+  }
+
+  async _renderDebugTimeline(timeline, startMs, endMs) {
+    const wrap = this.shadowRoot.getElementById("debugTimelineWrap");
+    const canvas = this.shadowRoot.getElementById("debugTimelineCanvas");
+    if (!wrap || !canvas) return;
+
+    if (!Array.isArray(timeline) || timeline.length === 0) {
+      this._clearDebugTimeline();
+      return;
+    }
+
+    const Chart = await loadChartJs();
+    const orderedTimeline = [...timeline].sort((a, b) => a.startMs - b.startMs);
+    const uniqueLabels = [...new Set(orderedTimeline.map(x => x.label))];
+    const preferred = ["Unknown", "Home", "Away", "In transit"];
+    const stateLabels = [
+      ...preferred.filter(x => uniqueLabels.includes(x)),
+      ...uniqueLabels.filter(x => !preferred.includes(x)).sort(),
+    ];
+    const idxByLabel = new Map(stateLabels.map((label, idx) => [label, idx]));
+    const colorByLabel = new Map();
+    for (const x of orderedTimeline) {
+      if (x.color && !colorByLabel.has(x.label)) colorByLabel.set(x.label, x.color);
+    }
+
+    const points = [];
+    for (const x of orderedTimeline) {
+      const y = idxByLabel.get(x.label);
+      if (!Number.isFinite(y)) continue;
+      points.push({ x: x.startMs, y });
+      points.push({ x: x.endMs, y });
+    }
+
+    if (points.length === 0) {
+      this._clearDebugTimeline();
+      return;
+    }
+
+    const isWeekly = this._config?.time_range === "weekly";
+    const tickFmt = new Intl.DateTimeFormat(undefined, isWeekly
+      ? { weekday: "short", hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit" });
+
+    const withAlpha = (hexColor, alpha) => {
+      if (typeof hexColor !== "string") return `rgba(120, 144, 156, ${alpha})`;
+      const hex = hexColor.trim();
+      const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+      if (!m) return `rgba(120, 144, 156, ${alpha})`;
+      const n = parseInt(m[1], 16);
+      const r = (n >> 16) & 255;
+      const g = (n >> 8) & 255;
+      const b = n & 255;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
+    const stateBandPlugin = {
+      id: "stateBandBackground",
+      beforeDatasetsDraw: chart => {
+        const { ctx, chartArea, scales } = chart;
+        const yScale = scales?.y;
+        if (!chartArea || !yScale) return;
+        const { left, right, top, bottom } = chartArea;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, top, right - left, bottom - top);
+        ctx.clip();
+
+        for (let i = 0; i < stateLabels.length; i++) {
+          const yTop = yScale.getPixelForValue(i - 0.5);
+          const yBottom = yScale.getPixelForValue(i + 0.5);
+          const bandTop = Math.max(top, Math.min(yTop, yBottom));
+          const bandBottom = Math.min(bottom, Math.max(yTop, yBottom));
+          if (bandBottom <= bandTop) continue;
+
+          const baseColor = colorByLabel.get(stateLabels[i]) || UNKNOWN_COLOR;
+          ctx.fillStyle = withAlpha(baseColor, 0.12);
+          ctx.fillRect(left, bandTop, right - left, bandBottom - bandTop);
+        }
+        ctx.restore();
+      },
+    };
+
+    if (this._debugChartInstance) this._debugChartInstance.destroy();
+    this._debugChartInstance = new Chart(canvas, {
+      type: "line",
+      plugins: [stateBandPlugin],
+      data: {
+        datasets: [{
+          data: points,
+          parsing: false,
+          stepped: true,
+          borderColor: "#455A64",
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 250 },
+        interaction: { intersect: false, mode: "nearest" },
+        scales: {
+          x: {
+            type: "linear",
+            min: startMs,
+            max: endMs,
+            ticks: {
+              callback: value => tickFmt.format(new Date(Number(value))),
+              maxRotation: 0,
+              autoSkip: true,
+            },
+          },
+          y: {
+            min: -0.5,
+            max: stateLabels.length - 0.5,
+            ticks: {
+              stepSize: 1,
+              callback: value => stateLabels[Math.round(Number(value))] || "",
+            },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => {
+                const t = items?.[0]?.parsed?.x;
+                return Number.isFinite(t) ? tickFmt.format(new Date(t)) : "";
+              },
+              label: ctx => {
+                const idx = Math.round(ctx.parsed.y);
+                return ` ${stateLabels[idx] || "Unknown"}`;
+              },
+            },
+          },
+        },
+      },
+    });
+    wrap.style.display = "";
+  }
+
+  _clearDebugTimeline() {
+    if (this._debugChartInstance) {
+      this._debugChartInstance.destroy();
+      this._debugChartInstance = null;
+    }
+    const wrap = this.shadowRoot.getElementById("debugTimelineWrap");
+    if (wrap) wrap.style.display = "none";
   }
 
   _renderStats(segments) {
