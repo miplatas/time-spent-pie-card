@@ -246,6 +246,7 @@ speed_reset_threshold: 10
 - `1.0.9`: Fixed donut history classification so long `not_home` intervals are split into actual `In transit` time plus remaining `Away` time, avoiding all-day false `In transit` blocks near threshold boundaries (e.g. 32 vs 33 km/h). Also fixed the visual editor output to always include `type: custom:time-spent-pie-card`.
 - `1.0.10`: Updated default speed set and reset thresholds to 20 and 5 km/h.
 - `1.0.11`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning. **Current release.**
+- `1.0.12`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning. **Current release.**
 ---
 
 ## License

@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.11
+ * time-spent-pie-card.js  — v1.0.12
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -39,6 +39,8 @@
  *            selected daily/weekly range) to calibrate Away vs In transit
  *            threshold behavior. Includes colored state bands and timeline
  *            classification based on interval splitting.
+ *  - v1.0.12: Added a debug historical state-vs-time graph at the bottom (debug mode), 
+ *            Added a dedicated state history bar block below the debug chart.
  */
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
@@ -320,6 +322,10 @@ class TimeSpentPieCard extends HTMLElement {
         .debug-timeline-wrap{display:none;margin-top:4px;background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:8px;padding:8px}
         .debug-timeline-title{font-size:.68rem;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px}
         .debug-timeline-canvas{width:100%;height:170px}
+        .debug-statebar-wrap{display:none;margin-top:4px;background:var(--secondary-background-color,rgba(0,0,0,.04));border-radius:8px;padding:8px}
+        .debug-statebar{display:flex;height:14px;border-radius:999px;overflow:hidden;background:rgba(0,0,0,.12)}
+        .debug-statebar-seg{height:100%}
+        .debug-statebar-last{margin-top:6px;font-size:.68rem;color:var(--secondary-text-color)}
       </style>
       <div class="card-root">
         <p class="card-title"  id="title">Loading...</p>
@@ -342,6 +348,11 @@ class TimeSpentPieCard extends HTMLElement {
         <div class="debug-timeline-wrap" id="debugTimelineWrap">
           <p class="debug-timeline-title">State history (debug)</p>
           <canvas id="debugTimelineCanvas" class="debug-timeline-canvas"></canvas>
+        </div>
+        <div class="debug-statebar-wrap" id="debugStateBarWrap">
+          <p class="debug-timeline-title">State bar (debug)</p>
+          <div class="debug-statebar" id="debugStateBar"></div>
+          <div class="debug-statebar-last" id="debugStateBarLast"></div>
         </div>
       </div>`;
   }
@@ -496,6 +507,7 @@ class TimeSpentPieCard extends HTMLElement {
       await this._renderChart(segments);
       this._renderStats(segments);
       if (debug) {
+        this._renderDebugStateBar(timeline, rangeStart.getTime(), Date.now());
         await this._renderDebugTimeline(timeline, rangeStart.getTime(), Date.now());
       }
       this._hideMessages();
@@ -764,17 +776,60 @@ class TimeSpentPieCard extends HTMLElement {
       },
     };
 
+    const historyBarPlugin = {
+      id: "historyBarOverlay",
+      beforeDatasetsDraw: chart => {
+        const { ctx, chartArea, scales } = chart;
+        const xScale = scales?.x;
+        const yScale = scales?.y;
+        if (!chartArea || !xScale || !yScale) return;
+
+        const { left, right, top, bottom } = chartArea;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, top, right - left, bottom - top);
+        ctx.clip();
+
+        for (const seg of orderedTimeline) {
+          const idx = idxByLabel.get(seg.label);
+          if (!Number.isFinite(idx)) continue;
+
+          const start = Math.max(startMs, Number(seg.startMs));
+          const end = Math.min(endMs, Number(seg.endMs));
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+
+          const x0 = xScale.getPixelForValue(start);
+          const x1 = xScale.getPixelForValue(end);
+          const leftPx = Math.max(left, Math.min(x0, x1));
+          const rightPx = Math.min(right, Math.max(x0, x1));
+          if (rightPx <= leftPx) continue;
+
+          const yTop = yScale.getPixelForValue(idx - 0.32);
+          const yBottom = yScale.getPixelForValue(idx + 0.32);
+          const segTop = Math.max(top, Math.min(yTop, yBottom));
+          const segBottom = Math.min(bottom, Math.max(yTop, yBottom));
+          if (segBottom <= segTop) continue;
+
+          const baseColor = seg.color || colorByLabel.get(seg.label) || UNKNOWN_COLOR;
+          ctx.fillStyle = withAlpha(baseColor, 0.72);
+          ctx.fillRect(leftPx, segTop, rightPx - leftPx, segBottom - segTop);
+        }
+
+        ctx.restore();
+      },
+    };
+
     if (this._debugChartInstance) this._debugChartInstance.destroy();
     this._debugChartInstance = new Chart(canvas, {
       type: "line",
-      plugins: [stateBandPlugin],
+      plugins: [stateBandPlugin, historyBarPlugin],
       data: {
         datasets: [{
           data: points,
           parsing: false,
           stepped: true,
-          borderColor: "#455A64",
-          borderWidth: 2,
+          borderColor: "#263238",
+          borderWidth: 1.5,
           pointRadius: 0,
           tension: 0,
         }],
@@ -831,6 +886,61 @@ class TimeSpentPieCard extends HTMLElement {
     }
     const wrap = this.shadowRoot.getElementById("debugTimelineWrap");
     if (wrap) wrap.style.display = "none";
+
+    const barWrap = this.shadowRoot.getElementById("debugStateBarWrap");
+    const bar = this.shadowRoot.getElementById("debugStateBar");
+    const last = this.shadowRoot.getElementById("debugStateBarLast");
+    if (barWrap) barWrap.style.display = "none";
+    if (bar) bar.innerHTML = "";
+    if (last) last.textContent = "";
+  }
+
+  _renderDebugStateBar(timeline, startMs, endMs) {
+    const wrap = this.shadowRoot.getElementById("debugStateBarWrap");
+    const bar = this.shadowRoot.getElementById("debugStateBar");
+    const last = this.shadowRoot.getElementById("debugStateBarLast");
+    if (!wrap || !bar || !last) return;
+
+    if (!Array.isArray(timeline) || timeline.length === 0) {
+      wrap.style.display = "none";
+      bar.innerHTML = "";
+      last.textContent = "";
+      return;
+    }
+
+    const ordered = [...timeline]
+      .map(x => ({
+        label: x.label || "Unknown",
+        color: x.color || UNKNOWN_COLOR,
+        startMs: Math.max(startMs, Number(x.startMs)),
+        endMs: Math.min(endMs, Number(x.endMs)),
+      }))
+      .filter(x => Number.isFinite(x.startMs) && Number.isFinite(x.endMs) && x.endMs > x.startMs)
+      .sort((a, b) => a.startMs - b.startMs);
+
+    if (ordered.length === 0) {
+      wrap.style.display = "none";
+      bar.innerHTML = "";
+      last.textContent = "";
+      return;
+    }
+
+    bar.innerHTML = "";
+    for (const seg of ordered) {
+      const dur = Math.max(1, seg.endMs - seg.startMs);
+      const el = document.createElement("div");
+      el.className = "debug-statebar-seg";
+      el.style.flex = `${dur} 0 0`;
+      el.style.background = seg.color;
+      const startTxt = new Date(seg.startMs).toLocaleTimeString();
+      const endTxt = new Date(seg.endMs).toLocaleTimeString();
+      el.title = `${seg.label} (${startTxt} - ${endTxt})`;
+      bar.appendChild(el);
+    }
+
+    const lastSeg = ordered[ordered.length - 1];
+    last.textContent = `Last state: ${lastSeg.label} @ ${new Date(lastSeg.endMs).toLocaleTimeString()}`;
+    wrap.style.display = "";
   }
 
   _renderStats(segments) {
