@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.8
+ * time-spent-pie-card.js  — v1.0.9
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -165,10 +165,11 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
   });
 
   // Need at least two points to form a pair
-  if (relevant.length < 2) return { medianSpeed: 0, movingDistanceKm: 0 };
+  if (relevant.length < 2) return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0 };
 
   const speeds = [];
   let movingDistanceKm = 0;
+  let movingSeconds = 0;
 
   for (let i = 0; i < relevant.length - 1; i++) {
     const a   = relevant[i];
@@ -189,10 +190,13 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
     if (speedKmh > MAX_PLAUSIBLE_KMH) continue;
 
     speeds.push(speedKmh);
-    if (speedKmh >= speedThreshold) movingDistanceKm += distKm;
+    if (speedKmh >= speedThreshold) {
+      movingDistanceKm += distKm;
+      movingSeconds += dtSeconds;
+    }
   }
 
-  if (speeds.length === 0) return { medianSpeed: 0, movingDistanceKm: 0 };
+  if (speeds.length === 0) return { medianSpeed: 0, movingDistanceKm: 0, movingSeconds: 0 };
 
   // Median is far more robust than max against occasional GPS jumps
   speeds.sort((a, b) => a - b);
@@ -201,7 +205,7 @@ function analyzeIntervalMotion(trackerList, startMs, endMs, speedThreshold) {
     ? (speeds[mid - 1] + speeds[mid]) / 2
     : speeds[mid];
 
-  return { medianSpeed, movingDistanceKm };
+  return { medianSpeed, movingDistanceKm, movingSeconds };
 }
 
 /** Fallback: explicit speed attribute (for trackers that expose it) */
@@ -495,31 +499,10 @@ class TimeSpentPieCard extends HTMLElement {
     // pairs that accidentally exceed the speed threshold).
     const MIN_TRANSIT_DISTANCE_KM = 0.2; // 200 m
 
-    const classify = (stateObj, startMs, endMs) => {
-      // Priority 1: explicit speed attribute on person.* state
-      let speed = extractSpeed(stateObj);
-
-      // Priority 2: derive speed from GPS tracker history scoped to this interval
-      if (speed < speedSetThreshold && trackerList.length >= 2) {
-        const motion = analyzeIntervalMotion(trackerList, startMs, endMs, speedSetThreshold);
-
-        // Only accept the motion result if:
-        //  a) median speed is above set threshold  (not just a stray fast pair)
-        //  b) meaningful distance was covered above threshold (avoids 1-pair spikes)
-        if (motion.medianSpeed >= speedSetThreshold &&
-            motion.movingDistanceKm >= MIN_TRANSIT_DISTANCE_KM) {
-          speed = motion.medianSpeed;
-        }
-      }
-
-      // Each interval is evaluated independently — no sticky state carried over
-      const isInTransit = speed >= speedSetThreshold;
-      if (isInTransit) return { label: "In transit", color: DRIVING_COLOR };
-
-      const s = stateObj.s ?? stateObj.state ?? "unknown";
-      if (s === "home")                           return { label: "Home",      color: HOME_COLOR    };
-      if (s === "unknown" || s === "unavailable") return { label: "Unknown",  color: UNKNOWN_COLOR };
-      return { label: getZoneName(hass, s), color: null };
+    const addHours = (label, color, hours) => {
+      if (hours <= 0) return;
+      if (!acc[label]) acc[label] = { hours: 0, color };
+      acc[label].hours += hours;
     };
 
     for (let i = 0; i < personList.length; i++) {
@@ -530,9 +513,45 @@ class TimeSpentPieCard extends HTMLElement {
       const deltaH  = msToHours(endMs - startMs);
       if (deltaH <= 0) continue;
 
-      const { label, color } = classify(cur, startMs, endMs);
-      if (!acc[label]) acc[label] = { hours: 0, color };
-      acc[label].hours += deltaH;
+      const s = cur.s ?? cur.state ?? "unknown";
+
+      // Prefer tracker-derived motion to avoid classifying an entire long
+      // not_home interval as In transit because of a brief movement burst.
+      let motion = null;
+      if (trackerList.length >= 2) {
+        const m = analyzeIntervalMotion(trackerList, startMs, endMs, speedSetThreshold);
+        if (m.medianSpeed >= speedSetThreshold && m.movingDistanceKm >= MIN_TRANSIT_DISTANCE_KM) {
+          motion = m;
+        }
+      }
+
+      if (s === "not_home") {
+        // Split not_home time: only moving slices become In transit; remainder stays Away.
+        let transitH = 0;
+        if (motion) {
+          transitH = Math.min(deltaH, msToHours(motion.movingSeconds * 1000));
+        } else {
+          // Fallback for setups without tracker history: keep legacy behavior.
+          const speed = extractSpeed(cur);
+          if (speed >= speedSetThreshold) transitH = deltaH;
+        }
+
+        addHours("In transit", DRIVING_COLOR, transitH);
+        addHours("Away", null, deltaH - transitH);
+        continue;
+      }
+
+      if (s === "home") {
+        addHours("Home", HOME_COLOR, deltaH);
+        continue;
+      }
+
+      if (s === "unknown" || s === "unavailable") {
+        addHours("Unknown", UNKNOWN_COLOR, deltaH);
+        continue;
+      }
+
+      addHours(getZoneName(hass, s), null, deltaH);
     }
 
     // Assign colors to custom zones
@@ -626,6 +645,7 @@ class TimeSpentPieCard extends HTMLElement {
   static getConfigElement() { return document.createElement("time-spent-pie-card-editor"); }
   static getStubConfig()    {
     return {
+      type: "custom:time-spent-pie-card",
       entity: "person.user1",
       time_range: "daily",
       speed_set_threshold: 15,
@@ -677,6 +697,7 @@ class TimeSpentPieCardEditor extends HTMLElement {
   _fire() {
     const sr  = this.shadowRoot;
     const cfg = {
+      type:            this._config?.type || "custom:time-spent-pie-card",
       entity:          sr.getElementById("entity").value.trim(),
       time_range:      sr.getElementById("time_range").value,
       chart_type:      sr.getElementById("chart_type").value,

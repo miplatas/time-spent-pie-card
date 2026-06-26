@@ -1,8 +1,12 @@
 # Time Spent Pie Card
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/miplatas/time-spent-pie-card?display_name=tag)](https://github.com/miplatas/time-spent-pie-card/releases)
+[![GitHub last commit](https://img.shields.io/github/last-commit/miplatas/time-spent-pie-card)](https://github.com/miplatas/time-spent-pie-card/commits/main)
 
 A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** with accumulated time in hours for each location and the `In transit` state, based on `person.*` entity history.
+
+![Configuration example result](images/test_example.png)
 
 ---
 
@@ -174,6 +178,18 @@ speed_reset_threshold: 10
 debug: true
 ```
 
+### Example From This Configuration
+
+```yaml
+type: custom:time-spent-pie-card
+entity: person.person1
+name: My name goes here
+time_range: daily
+speed_set_threshold: 20
+speed_reset_threshold: 5
+chart_type: doughnut
+```
+
 ### Legacy Compatibility Example
 
 ```yaml
@@ -226,10 +242,11 @@ speed_reset_threshold: 10
 - `1.0.5`: Added sustained-movement requirement to reduce false In transit detection.
 - `1.0.6`: Fixed persistent false In transit positives. Each interval is now evaluated independently using median speed + minimum distance (200 m) requirement. Removed shared hysteresis state that caused entire days to be classified as In transit after a single GPS spike. Added MAX_DT_SECONDS guard on GPS pairs to suppress stale-ping errors.
 - `1.0.7`: Fixed speed under-reporting (~3.6x too low) for native GPS device trackers (HA Companion App, OwnTracks, etc.). Their `speed`/`velocity`/`gps_speed` attributes are reported in m/s by the underlying Android/iOS location APIs but were being treated as km/h when no unit attribute was present. Now correctly assumed to be m/s for those attributes.
-- `1.0.8`: Fixed the live "State" pill showing "Away"/"Home" instead of "In transit" while driving for trackers (e.g. Life360) that don't expose a speed attribute. The live pill now falls back to a position-derived speed estimate from the most recently cached GPS history (median speed + 200 m moving-distance check, ignored if the last sample is older than 3 minutes). **Current release.**
+- `1.0.8`: Fixed the live "State" pill showing "Away"/"Home" instead of "In transit" while driving for trackers (e.g. Life360) that don't expose a speed attribute. The live pill now falls back to a position-derived speed estimate from the most recently cached GPS history (median speed + 200 m moving-distance check, ignored if the last sample is older than 3 minutes).
+- `1.0.9`: Fixed donut history classification so long `not_home` intervals are split into actual `In transit` time plus remaining `Away` time, avoiding all-day false `In transit` blocks near threshold boundaries (e.g. 32 vs 33 km/h). Also fixed the visual editor output to always include `type: custom:time-spent-pie-card`. **Current release.**
 
 ---
 
 ## License
 
-MIT - Copyright (c) miplatas / FIME-UANL
+GNU - Copyright (c) miplatas / FIME-UANL
