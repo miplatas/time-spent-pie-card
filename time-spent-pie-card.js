@@ -1,5 +1,5 @@
 /**
- * time-spent-pie-card.js  — v1.0.12
+ * time-spent-pie-card.js  — v1.0.13
  * HACS Lovelace Custom Card — Time Spent Pie Chart
  * Author: miplatas / FIME-UANL  |  License: MIT
  *
@@ -41,7 +41,7 @@
  *            classification based on interval splitting.
  *  - v1.0.12: Added a debug historical state-vs-time graph at the bottom (debug mode), 
  *            Added a dedicated state history bar block below the debug chart.
- */
+ *  - v1.0.13: Update location of debug timeline graph to the top.
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
 function loadChartJs() {
@@ -334,6 +334,11 @@ class TimeSpentPieCard extends HTMLElement {
           <div class="top-pill"><span class="top-key">Speed</span><span class="top-val" id="currentSpeed">-</span></div>
         </div>
         <p class="card-subtitle" id="subtitle"></p>
+        <div class="debug-statebar-wrap" id="debugStateBarWrap">
+          <p class="debug-timeline-title">State bar (debug)</p>
+          <div class="debug-statebar" id="debugStateBar"></div>
+          <div class="debug-statebar-last" id="debugStateBarLast"></div>
+        </div>
         <div class="stats-grid" id="stats"></div>
         <div class="chart-wrapper" id="chartWrapper" style="display:none">
           <canvas id="pieCanvas"></canvas>
@@ -348,11 +353,6 @@ class TimeSpentPieCard extends HTMLElement {
         <div class="debug-timeline-wrap" id="debugTimelineWrap">
           <p class="debug-timeline-title">State history (debug)</p>
           <canvas id="debugTimelineCanvas" class="debug-timeline-canvas"></canvas>
-        </div>
-        <div class="debug-statebar-wrap" id="debugStateBarWrap">
-          <p class="debug-timeline-title">State bar (debug)</p>
-          <div class="debug-statebar" id="debugStateBar"></div>
-          <div class="debug-statebar-last" id="debugStateBarLast"></div>
         </div>
       </div>`;
   }
@@ -507,8 +507,13 @@ class TimeSpentPieCard extends HTMLElement {
       await this._renderChart(segments);
       this._renderStats(segments);
       if (debug) {
-        this._renderDebugStateBar(timeline, rangeStart.getTime(), Date.now());
-        await this._renderDebugTimeline(timeline, rangeStart.getTime(), Date.now());
+        const tStart = rangeStart.getTime();
+        const tEnd = Date.now();
+        const debugTimeline = (Array.isArray(timeline) && timeline.length > 0)
+          ? timeline
+          : this._buildRawTimeline(personList, hass, tStart, tEnd);
+        this._renderDebugStateBar(debugTimeline, tStart, tEnd);
+        await this._renderDebugTimeline(debugTimeline, tStart, tEnd);
       }
       this._hideMessages();
     } catch (err) {
@@ -647,6 +652,31 @@ class TimeSpentPieCard extends HTMLElement {
       }
     }
     return merged;
+  }
+
+  _buildRawTimeline(personList, hass, startMs, endMs) {
+    const out = [];
+    if (!Array.isArray(personList) || personList.length === 0) return out;
+
+    for (let i = 0; i < personList.length; i++) {
+      const cur = personList[i];
+      const next = personList[i + 1];
+      const sMs = Math.max(startMs, stateTs(cur));
+      const eMs = Math.min(endMs, next ? stateTs(next) : Date.now());
+      if (!Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) continue;
+
+      const s = cur.s ?? cur.state ?? "unknown";
+      if (s === "home") {
+        out.push({ label: "Home", color: HOME_COLOR, startMs: sMs, endMs: eMs });
+      } else if (s === "not_home") {
+        out.push({ label: "Away", color: SEGMENT_COLORS[0], startMs: sMs, endMs: eMs });
+      } else if (s === "unknown" || s === "unavailable") {
+        out.push({ label: "Unknown", color: UNKNOWN_COLOR, startMs: sMs, endMs: eMs });
+      } else {
+        out.push({ label: getZoneName(hass, s), color: SEGMENT_COLORS[1], startMs: sMs, endMs: eMs });
+      }
+    }
+    return out;
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -926,11 +956,14 @@ class TimeSpentPieCard extends HTMLElement {
     }
 
     bar.innerHTML = "";
+    const totalMs = Math.max(1, endMs - startMs);
     for (const seg of ordered) {
       const dur = Math.max(1, seg.endMs - seg.startMs);
       const el = document.createElement("div");
       el.className = "debug-statebar-seg";
-      el.style.flex = `${dur} 0 0`;
+      const pct = Math.max((dur / totalMs) * 100, 0.5);
+      el.style.flex = "0 0 auto";
+      el.style.width = `${pct}%`;
       el.style.background = seg.color;
       const startTxt = new Date(seg.startMs).toLocaleTimeString();
       const endTxt = new Date(seg.endMs).toLocaleTimeString();

@@ -245,8 +245,10 @@ speed_reset_threshold: 10
 - `1.0.8`: Fixed the live "State" pill showing "Away"/"Home" instead of "In transit" while driving for trackers (e.g. Life360) that don't expose a speed attribute. The live pill now falls back to a position-derived speed estimate from the most recently cached GPS history (median speed + 200 m moving-distance check, ignored if the last sample is older than 3 minutes).
 - `1.0.9`: Fixed donut history classification so long `not_home` intervals are split into actual `In transit` time plus remaining `Away` time, avoiding all-day false `In transit` blocks near threshold boundaries (e.g. 32 vs 33 km/h). Also fixed the visual editor output to always include `type: custom:time-spent-pie-card`.
 - `1.0.10`: Updated default speed set and reset thresholds to 20 and 5 km/h.
-- `1.0.11`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning. **Current release.**
-- `1.0.12`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning. **Current release.**
+- `1.0.11`: Added a debug historical state-vs-time graph at the bottom (debug mode), fixed to the selected time_range (daily/weekly), to calibrate Away vs In transit classification. Includes colored state bands for easier threshold tuning.
+- `1.0.12`: Added a debug historical state-vs-time graph at the bottom (debug mode), Added a dedicated state history bar block below the debug chart. 
+- `1.0.13`: Update location of debug timeline graph to the top. **Current release.**
+
 ---
 
 ## License
