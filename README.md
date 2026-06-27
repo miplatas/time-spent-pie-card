@@ -3,8 +3,12 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/miplatas/time-spent-pie-card?display_name=tag)](https://github.com/miplatas/time-spent-pie-card/releases)
 [![GitHub last commit](https://img.shields.io/github/last-commit/miplatas/time-spent-pie-card)](https://github.com/miplatas/time-spent-pie-card/commits/main)
+[![PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/miplatas)
 
-A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** with accumulated time in hours for each location and the `In transit` state, based on `person.*` entity history.
+
+A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** with accumulated time in hours for each location and the `In transit` state, based on `person.*` entity history. 
+
+Only requieres the tracker `person.*` and automatically classifies `Home`, `In transit`, `Away`, and any custom HA zones.
 
 ![Configuration example result](images/test_example.png)
 
@@ -14,13 +18,13 @@ A custom Home Assistant Lovelace card that shows a **pie or doughnut chart** wit
 
 - Queries the Home Assistant history API for a **daily** range (today, 00:00 -> now) or **weekly** range (Monday 00:00 -> now).
 - **Speed hysteresis filter**: use `speed_set_threshold` to enter In transit and `speed_reset_threshold` to leave In transit.
-- Speed estimation from GPS history includes anti-jitter filtering (minimum sample interval, minimum distance jump, and plausible speed cap).
+- Speed estimation from GPS history speed is estimated from position meassurements, includes anti-jitter filtering (minimum sample interval, minimum distance jump, and plausible speed cap).
 - In transit classification also requires sustained movement above threshold (time or distance), not only a single speed spike.
 - Automatically classifies `Home`, `In transit`, `Away`, and any custom HA zones.
 - Shows live header pills for the person's **current state** and **current speed**.
 - Supports both **doughnut** and **pie** chart styles via configuration.
 - Adapts to light/dark themes using native HA CSS variables.
-- Responsive layout: use it in grids or columns to show one family member per card.
+- Responsive layout: use it in grids to show more than one family member per card.
 
 ---
 
@@ -85,14 +89,6 @@ speed_reset_threshold: 10       # Optional - km/h to exit "In transit" (default:
   Speed in km/h that exits `In transit`. Must be less than or equal to `speed_set_threshold`.
   Typical values: `15` set and `10` reset.
 
-Derived-motion safeguards used internally:
-- Minimum interval between GPS samples: `15 s`
-- Minimum movement between samples: `15 m`
-- Maximum plausible speed cap: `220 km/h`
-- Sustained movement requirement to classify `In transit`: at least `60 s` above set threshold or about `300 m` of above-threshold movement
-- `speed_threshold` (legacy):
-  Backward-compatible fallback only. When `speed_set_threshold` is not set, this value is used as the set threshold.
-
 ---
 
 ## Example - Multiple People In A Grid
@@ -137,8 +133,8 @@ entity: person.person1
 name: Person 1 Weekly
 time_range: weekly
 chart_type: pie
-speed_set_threshold: 22
-speed_reset_threshold: 14
+speed_set_threshold: 20
+speed_reset_threshold: 5
 ```
 
 ### Two-Column Dashboard For Two People
@@ -159,18 +155,6 @@ cards:
     name: Person 2
     time_range: daily
     chart_type: doughnut
-```
-
-### Example From This Configuration
-
-```yaml
-type: custom:time-spent-pie-card
-entity: person.person1
-name: My name goes here
-time_range: daily
-speed_set_threshold: 20
-speed_reset_threshold: 5
-chart_type: doughnut
 ```
 
 ### Recommended Hysteresis Values
@@ -202,10 +186,9 @@ speed_reset_threshold: 5
 - Internally it uses **Chart.js 4**, loaded dynamically from CDN if it is not available on the page.
 - History refresh is limited to **once per minute** to avoid overloading the API.
 - States with accumulated `0 h` are omitted from both the chart and stats chips.
-- Total accumulated hours are displayed below the chart.
 
 ---
 
 ## License
 
-GNU.
+GNU GENERAL PUBLIC LICENSE Version 3. — see [LICENSE](LICENSE)

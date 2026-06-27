@@ -1,7 +1,7 @@
 /**
- * time-spent-pie-card.js  — v1.0.14
+ * time-spent-pie-card.js  — v1.1.0
  * HACS Lovelace Custom Card — Time Spent Pie Chart
- * Author: miplatas / FIME-UANL  |  License: MIT
+ * Author: miplatas   |  License: GPL-3.0  |  Repo: https://github.com/miplatas/time-spent-pie-card
  *
  * CHANGELOG:
  *  - v1.0.0: Initial release.
@@ -42,6 +42,7 @@
  *  - v1.0.12: Added a debug historical state-vs-time graph at the bottom (debug mode), 
  *            Added a dedicated state history bar block below the debug chart.
  *  - v1.0.14: Eliminate(debug mode). 
+ *  - v1.1.0:  Only readme updates, no code changes. 
  */
 
 // ─── Dynamic Chart.js ─────────────────────────────────────────────────────────
